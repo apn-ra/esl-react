@@ -7,6 +7,7 @@ Hardening note for the implemented slice:
 - If `disconnect()` is called while `connect()` is still pending, the pending connect promise is rejected and the runtime moves to `Closed`/`Disconnected`.
 - If the connect/auth handshake does not complete before the current handshake timeout budget, `connect()` rejects with `CommandTimeoutException`, the runtime returns to `Disconnected`, and `SessionState` becomes `Failed`.
 - Unexpected or malformed inbound frames during the handshake fail closed and reject `connect()`.
+- After authentication succeeds, inbound event frames are delivered immediately on the live socket without reconnect-aware buffering or subscription replay.
 
 ## State machines
 
@@ -125,12 +126,14 @@ In the currently implemented slice, when a connection drops (socket close, netwo
 2. `SessionState` transitions to `Disconnected`.
 3. All pending `api` commands that have been sent but have not received a reply are rejected with `ConnectionLostException`.
 4. Commands that are enqueued but not yet sent are also rejected with `ConnectionLostException`.
-5. Pending `bgapi` jobs that have received their acknowledgment but not their `BACKGROUND_JOB` completion event are **not** rejected. They remain tracked and their promises will resolve if the completion event arrives after reconnect. See [bgapi-tracking.md](bgapi-tracking.md) for configurable timeout behavior.
-6. Active subscriptions and filters are preserved in `SubscriptionManager` memory so they can be replayed on reconnect.
+5. Pending `bgapi` jobs that have received their acknowledgment but not their `BACKGROUND_JOB` completion event are rejected in the current implementation if the connection closes.
+6. Desired subscriptions and filters remain tracked in memory, but no reconnect-aware event replay or subscription restoration is implemented in this phase.
 
 ---
 
 ## What triggers reconnect
+
+The sections below describe planned reconnect behavior from the implementation plan. Reconnect supervision is not implemented in the current tested slice.
 
 Reconnect is triggered by any transition to `Reconnecting`. This can be caused by:
 
@@ -160,6 +163,8 @@ The default behavior is to NOT retry on auth failure, because a bad password wil
 ---
 
 ## Resubscription after reconnect
+
+This section is still planned behavior only. The current implementation does not replay subscriptions or filters after reconnect.
 
 After `ConnectionState` reaches `Authenticated` following a reconnect:
 

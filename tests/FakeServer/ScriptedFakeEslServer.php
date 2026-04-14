@@ -11,6 +11,7 @@ final class ScriptedFakeEslServer
     private readonly SocketServer $server;
     /** @var \Closure(ConnectionInterface): void|null */
     private ?\Closure $onConnection = null;
+    private ?ConnectionInterface $activeConnection = null;
 
     /** @var list<callable(ConnectionInterface, string): void> */
     private array $commandHandlers = [];
@@ -26,6 +27,7 @@ final class ScriptedFakeEslServer
         $this->onConnection = $onConnection !== null ? \Closure::fromCallable($onConnection) : null;
         $this->server = new SocketServer('127.0.0.1:0', [], $this->loop);
         $this->server->on('connection', function (ConnectionInterface $connection) use ($autoAuthRequest): void {
+            $this->activeConnection = $connection;
             if ($autoAuthRequest) {
                 $this->writeFrame($connection, "Content-Type: auth/request\n\n");
             }
@@ -53,6 +55,11 @@ final class ScriptedFakeEslServer
                         $handler = array_shift($this->commandHandlers);
                         $handler($connection, $command);
                     }
+                }
+            });
+            $connection->on('close', function () use ($connection): void {
+                if ($this->activeConnection === $connection) {
+                    $this->activeConnection = null;
                 }
             });
         });
@@ -96,6 +103,11 @@ final class ScriptedFakeEslServer
         $this->server->close();
     }
 
+    public function emitPlainEvent(array $headers, string $body = ''): void
+    {
+        $this->emitPlainEventTo($this->requireActiveConnection(), $headers, $body);
+    }
+
     public function writeCommandReply(ConnectionInterface $connection, string $replyText): void
     {
         $this->writeFrame($connection, "Content-Type: command/reply\nReply-Text: {$replyText}\n\n");
@@ -114,8 +126,38 @@ final class ScriptedFakeEslServer
         $this->writeFrame($connection, $frame);
     }
 
+    public function emitPlainEventTo(ConnectionInterface $connection, array $headers, string $body = ''): void
+    {
+        $eventHeaderLines = [];
+        foreach ($headers as $name => $value) {
+            $eventHeaderLines[] = sprintf('%s: %s', $name, rawurlencode((string) $value));
+        }
+
+        $eventPayload = implode("\n", $eventHeaderLines);
+        if ($body !== '') {
+            $eventPayload .= "\n\n" . $body;
+        }
+
+        $frame = sprintf(
+            "Content-Type: text/event-plain\nContent-Length: %d\n\n%s",
+            strlen($eventPayload),
+            $eventPayload,
+        );
+
+        $this->writeFrame($connection, $frame);
+    }
+
     private function writeFrame(ConnectionInterface $connection, string $frame): void
     {
         $connection->write($frame);
+    }
+
+    private function requireActiveConnection(): ConnectionInterface
+    {
+        if ($this->activeConnection === null) {
+            throw new \RuntimeException('No active fake-server connection available');
+        }
+
+        return $this->activeConnection;
     }
 }

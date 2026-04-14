@@ -34,6 +34,8 @@ final class AsyncEslRuntime
     public static function make(RuntimeConfig $config, ?LoopInterface $loop = null): AsyncEslClientInterface
     {
         $loop ??= Loop::get();
+        /** @var RuntimeClient|null $client */
+        $client = null;
 
         $correlation = new CorrelationContext(ConnectionSessionId::generate());
         $eventStream = new EventStream(new EventFactory(), $correlation);
@@ -60,6 +62,14 @@ final class AsyncEslRuntime
                 return $commandBus->dispatch($command, $description, $timeoutSeconds);
             },
             timeoutSeconds: $config->commandTimeout->subscriptionTimeoutSeconds,
+            canMutateLiveSession: static function () use (&$client): bool {
+                if (!$client instanceof RuntimeClient) {
+                    return false;
+                }
+
+                return $client->connectionState()->canAcceptCommands()
+                    && !$client->isDraining();
+            },
         );
         $client = new RuntimeClient(
             config: $config,

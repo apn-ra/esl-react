@@ -41,6 +41,20 @@ If a command cannot be accepted (e.g., backpressure limit reached, runtime is dr
 
 See [bgapi-tracking.md](bgapi-tracking.md) for full bgapi behavior.
 
+## Subscription and filter mutation model
+
+Subscription and filter mutations use the same authenticated live-session command path as other runtime commands, but they remain a separate control surface from `api()`.
+
+- The runtime starts with an explicit caller-owned baseline: no broad application event subscription is invented automatically.
+- `subscribe()` sends the full desired named-event set for the live session.
+- `unsubscribe()` sends either the reduced named-event set or `noevents` when the desired set becomes empty.
+- `subscribeAll()` switches the desired state to all events.
+- `addFilter()` and `removeFilter()` mutate the live session and the in-memory desired filter set together.
+- Duplicate subscribe/filter-add operations and removal of missing state are treated as deterministic no-ops.
+- Mutations before successful authentication, while draining, or after disconnect are rejected with `ConnectionException`.
+
+The desired subscription/filter state is intentionally kept in memory so a later reconnect phase can replay it. That replay behavior is not implemented in this phase.
+
 ---
 
 ## Timeout behavior
@@ -76,17 +90,19 @@ This constraint exists because the ESL protocol does not support request cancell
 
 ## Raw envelope stream
 
-Every inbound `EventEnvelope` is delivered to registered raw envelope listeners before typed dispatch occurs.
+Every inbound event frame that is successfully parsed and classified is delivered to registered raw `EventEnvelope` listeners before typed or unknown dispatch occurs.
 
 ```php
 $client->events()->onRawEnvelope(
-    function (\Apntalk\EslCore\Model\EventEnvelope $envelope): void {
-        // receives all envelopes: replies, events, bgapi completions
+    function (\Apntalk\EslCore\Correlation\EventEnvelope $envelope): void {
+        // receives inbound event envelopes only
     }
 );
 ```
 
-Raw envelope listeners receive envelopes in socket-received order. This stream is intended for debugging, logging, and replay capture. It is not filtered by event name or type.
+Raw envelope listeners receive event envelopes in socket-received order. This stream is intended for debugging, logging, and replay-adjacent observation. It is not filtered by event name or type.
+
+Reply traffic does not enter this event-envelope path. Command replies remain on the command bus / reply-routing path.
 
 ---
 
@@ -96,16 +112,19 @@ After raw envelope delivery, classified events are dispatched to typed event lis
 
 ```php
 $client->events()->onEvent(
-    \Apntalk\EslCore\Model\Event\ChannelAnswerEvent::class,
-    function (\Apntalk\EslCore\Model\Event\ChannelAnswerEvent $event): void {
+    'CHANNEL_ANSWER',
+    function (\Apntalk\EslCore\Events\ChannelLifecycleEvent $event): void {
         // ...
     }
 );
 ```
 
-- Listeners are matched by exact class name or by interface/parent class, depending on the emitter implementation.
-- Multiple listeners may be registered for the same event type.
+- Listeners are matched by exact ESL event name, such as `CHANNEL_CREATE` or `CHANNEL_ANSWER`.
+- The listener receives the corresponding typed `esl-core` model for known event families.
+- Multiple listeners may be registered for the same event name.
 - Listeners are called in registration order.
+
+`onAnyEvent()` receives every known typed event after any raw envelope listeners have run.
 
 ---
 
@@ -115,13 +134,19 @@ Event names that `esl-core` cannot map to a typed class are delivered as `RawEve
 
 ```php
 $client->events()->onUnknown(
-    function (\Apntalk\EslCore\Model\Event\RawEvent $event): void {
-        echo "Unrecognized event: " . $event->getEventName();
+    function (\Apntalk\EslCore\Events\RawEvent $event): void {
+        echo "Unrecognized event: " . $event->eventName();
     }
 );
 ```
 
 Unknown event listeners follow the same ordering and exception rules as typed listeners.
+Unknown events do not currently flow through `onAnyEvent()`; they stay on the explicit unknown-event path.
+
+Well-formed but unmapped events are different from malformed event payloads:
+
+- well-formed unmapped events become `RawEvent` and remain observable
+- malformed event payloads are dropped from the event surface and currently do not enter the unknown-event path
 
 ---
 
@@ -133,20 +158,9 @@ Exceptions thrown inside listener callbacks are caught by the event dispatch mac
 - abort delivery to subsequent listeners
 - prevent the next event from being processed
 
-Caught exceptions are passed to a configurable error handler. The default error handler writes the exception class, message, and stack trace to stderr.
+Caught exceptions are currently contained within the event dispatcher. The default internal handler writes a short message to stderr.
 
-To supply a custom error handler:
-
-```php
-$config = new RuntimeConfig(
-    // ...
-    listenerErrorHandler: function (\Throwable $e, object $event): void {
-        // log, metric, or re-throw if desired
-    },
-);
-```
-
-Rethrowing inside the error handler will propagate the exception upward into the ReactPHP event loop, which may crash the process depending on your loop configuration. This is the caller's responsibility.
+Listener exceptions are not currently surfaced through a stable public callback or health-specific metric surface in this phase. This is intentional: containment is implemented now, richer surfacing is deferred until the package can define that contract explicitly.
 
 ---
 

@@ -17,6 +17,17 @@ final class FilterManager
         $this->filters[] = ['headerName' => $headerName, 'headerValue' => $headerValue];
     }
 
+    public function hasFilter(string $headerName, string $headerValue): bool
+    {
+        foreach ($this->filters as $f) {
+            if ($f['headerName'] === $headerName && $f['headerValue'] === $headerValue) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function removeFilter(string $headerName, string $headerValue): void
     {
         $this->filters = array_values(array_filter(

@@ -4,15 +4,21 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "e9970970763585007cd483a8eca80c00",
+    "content-hash": "1b59eb4367748510eb29fedeb970db6f",
     "packages": [
         {
             "name": "apntalk/esl-core",
-            "version": "0.2.0",
+            "version": "v0.2.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/apn-ra/esl-core.git",
+                "reference": "d4ef5be55acaf12aff04bd00b886c21404a79dda"
+            },
             "dist": {
-                "type": "path",
-                "url": "../esl-core",
-                "reference": "5f62d6474eaf8808aac9f5e3cc7166a0d3c5ac5a"
+                "type": "zip",
+                "url": "https://api.github.com/repos/apn-ra/esl-core/zipball/d4ef5be55acaf12aff04bd00b886c21404a79dda",
+                "reference": "d4ef5be55acaf12aff04bd00b886c21404a79dda",
+                "shasum": ""
             },
             "require": {
                 "php": "^8.1"
@@ -28,36 +34,7 @@
                     "Apntalk\\EslCore\\": "src/"
                 }
             },
-            "autoload-dev": {
-                "psr-4": {
-                    "Apntalk\\EslCore\\Tests\\": "tests/"
-                }
-            },
-            "scripts": {
-                "test": [
-                    "phpunit --no-coverage"
-                ],
-                "smoke": [
-                    "phpunit --no-coverage tests/Integration/SmokeTest.php"
-                ],
-                "chaos": [
-                    "phpunit --no-coverage tests/Integration/ProtocolChaosTest.php"
-                ],
-                "analyse": [
-                    "phpstan analyse"
-                ],
-                "cs-fix": [
-                    "php-cs-fixer fix"
-                ],
-                "cs-check": [
-                    "php-cs-fixer fix --dry-run --diff --sequential"
-                ],
-                "check": [
-                    "@cs-check",
-                    "@analyse",
-                    "@test"
-                ]
-            },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -74,9 +51,11 @@
                 "protocol",
                 "telephony"
             ],
-            "transport-options": {
-                "relative": true
-            }
+            "support": {
+                "issues": "https://github.com/apn-ra/esl-core/issues",
+                "source": "https://github.com/apn-ra/esl-core/tree/v0.2.1"
+            },
+            "time": "2026-04-14T07:39:02+00:00"
         },
         {
             "name": "evenement/evenement",

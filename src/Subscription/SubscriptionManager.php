@@ -7,6 +7,7 @@ use Apntalk\EslCore\Commands\FilterCommand;
 use Apntalk\EslCore\Commands\NoEventsCommand;
 use Apntalk\EslCore\Contracts\CommandInterface;
 use Apntalk\EslReact\Contracts\SubscriptionManagerInterface;
+use Apntalk\EslReact\Exceptions\ConnectionException;
 use React\Promise\PromiseInterface;
 use function React\Promise\resolve;
 
@@ -20,25 +21,51 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         private readonly FilterManager $filters,
         private readonly \Closure $dispatchCommand,
         private readonly float $timeoutSeconds,
+        /** @var \Closure(): bool */
+        private readonly \Closure $canMutateLiveSession,
     ) {}
 
     public function subscribe(string ...$eventNames): PromiseInterface
     {
-        if ($eventNames === []) {
+        $normalized = $this->normalizeEventNames($eventNames);
+        if ($normalized === []) {
+            return $this->resolvedVoid();
+        }
+
+        $this->assertCanMutateLiveSession();
+
+        if ($this->activeSubscriptions->isSubscribedAll()) {
+            return $this->resolvedVoid();
+        }
+
+        $desired = $this->activeSubscriptions->eventNames();
+        foreach ($normalized as $name) {
+            if (!in_array($name, $desired, true)) {
+                $desired[] = $name;
+            }
+        }
+
+        if ($desired === $this->activeSubscriptions->eventNames()) {
             return $this->resolvedVoid();
         }
 
         return ($this->dispatchCommand)(
-            EventSubscriptionCommand::forNames(array_values($eventNames)),
-            'event plain ' . implode(' ', $eventNames),
+            EventSubscriptionCommand::forNames($desired),
+            'event plain ' . implode(' ', $desired),
             $this->timeoutSeconds,
-        )->then(function () use ($eventNames): void {
-            $this->activeSubscriptions->subscribe(...$eventNames);
+        )->then(function () use ($desired): void {
+            $this->activeSubscriptions->replace($desired);
         });
     }
 
     public function subscribeAll(): PromiseInterface
     {
+        $this->assertCanMutateLiveSession();
+
+        if ($this->activeSubscriptions->isSubscribedAll()) {
+            return $this->resolvedVoid();
+        }
+
         return ($this->dispatchCommand)(
             EventSubscriptionCommand::all(),
             'event plain all',
@@ -50,21 +77,57 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
     public function unsubscribe(string ...$eventNames): PromiseInterface
     {
-        if ($eventNames === []) {
+        $normalized = $this->normalizeEventNames($eventNames);
+        if ($normalized === []) {
             return $this->resolvedVoid();
         }
 
+        $this->assertCanMutateLiveSession();
+
+        if ($this->activeSubscriptions->isSubscribedAll()) {
+            throw new ConnectionException(
+                'Cannot unsubscribe specific events while subscribed to all events in the current implementation',
+            );
+        }
+
+        $desired = array_values(array_filter(
+            $this->activeSubscriptions->eventNames(),
+            static fn (string $name): bool => !in_array($name, $normalized, true),
+        ));
+
+        if ($desired === $this->activeSubscriptions->eventNames()) {
+            return $this->resolvedVoid();
+        }
+
+        $command = $desired === []
+            ? new NoEventsCommand()
+            : EventSubscriptionCommand::forNames($desired);
+        $description = $desired === []
+            ? 'noevents'
+            : 'event plain ' . implode(' ', $desired);
+
         return ($this->dispatchCommand)(
-            new NoEventsCommand(),
-            'noevents',
+            $command,
+            $description,
             $this->timeoutSeconds,
-        )->then(function () use ($eventNames): void {
-            $this->activeSubscriptions->unsubscribe(...$eventNames);
+        )->then(function () use ($desired): void {
+            if ($desired === []) {
+                $this->activeSubscriptions->reset();
+                return;
+            }
+
+            $this->activeSubscriptions->replace($desired);
         });
     }
 
     public function addFilter(string $headerName, string $headerValue): PromiseInterface
     {
+        $this->assertCanMutateLiveSession();
+
+        if ($this->filters->hasFilter($headerName, $headerValue)) {
+            return $this->resolvedVoid();
+        }
+
         return ($this->dispatchCommand)(
             FilterCommand::add($headerName, $headerValue),
             sprintf('filter %s %s', $headerName, $headerValue),
@@ -76,6 +139,12 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
     public function removeFilter(string $headerName, string $headerValue): PromiseInterface
     {
+        $this->assertCanMutateLiveSession();
+
+        if (!$this->filters->hasFilter($headerName, $headerValue)) {
+            return $this->resolvedVoid();
+        }
+
         return ($this->dispatchCommand)(
             FilterCommand::delete($headerName, $headerValue),
             sprintf('filter delete %s %s', $headerName, $headerValue),
@@ -104,5 +173,32 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         $promise = resolve(null);
 
         return $promise;
+    }
+
+    /**
+     * @param array<int|string, string> $eventNames
+     * @return list<string>
+     */
+    private function normalizeEventNames(array $eventNames): array
+    {
+        $normalized = [];
+        foreach ($eventNames as $name) {
+            if ($name === '') {
+                continue;
+            }
+
+            if (!in_array($name, $normalized, true)) {
+                $normalized[] = $name;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function assertCanMutateLiveSession(): void
+    {
+        if (!(($this->canMutateLiveSession)())) {
+            throw new ConnectionException('Runtime is not authenticated');
+        }
     }
 }

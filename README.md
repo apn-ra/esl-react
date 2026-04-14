@@ -6,8 +6,8 @@ This package turns `apntalk/esl-core` into a usable long-lived async runtime: it
 
 Current implementation status:
 
-- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, baseline event stream wiring, health snapshots, deterministic fake-server integration tests.
-- Present but still provisional relative to the plan: `bgapi()` completion flow, subscription restoration, reconnect supervision, heartbeat-driven liveness, explicit backpressure policy hardening, replay hooks.
+- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, health snapshots, deterministic fake-server integration tests.
+- Present but still provisional relative to the plan: `bgapi()` completion flow, explicit subscriptions on the wire, subscription restoration, reconnect supervision, heartbeat-driven liveness, explicit backpressure policy hardening, replay hooks.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`.
@@ -152,9 +152,9 @@ Timeout behavior and reconnect behavior for pending bgapi jobs are documented in
 
 ```php
 $client->events()->onEvent(
-    \Apntalk\EslCore\Model\Event\ChannelAnswerEvent::class,
-    function (\Apntalk\EslCore\Model\Event\ChannelAnswerEvent $event) {
-        echo "Channel answered: " . $event->getUniqueId();
+    'CHANNEL_ANSWER',
+    function (\Apntalk\EslCore\Events\ChannelLifecycleEvent $event) {
+        echo "Channel answered: " . $event->uniqueId();
     }
 );
 ```
@@ -163,8 +163,8 @@ $client->events()->onEvent(
 
 ```php
 $client->events()->onRawEnvelope(
-    function (\Apntalk\EslCore\Model\EventEnvelope $envelope) {
-        // receives every inbound envelope before typed dispatch
+    function (\Apntalk\EslCore\Correlation\EventEnvelope $envelope) {
+        // receives every inbound event envelope before typed/unknown dispatch
     }
 );
 ```
@@ -173,11 +173,19 @@ $client->events()->onRawEnvelope(
 
 ```php
 $client->events()->onUnknown(
-    function (\Apntalk\EslCore\Model\Event\RawEvent $event) {
-        echo "Unknown event type: " . $event->getEventName();
+    function (\Apntalk\EslCore\Events\RawEvent $event) {
+        echo "Unknown event type: " . $event->eventName();
     }
 );
 ```
+
+Current event-stream contract:
+
+- Inbound event frames are delivered in socket order.
+- Raw envelope listeners run first for each event frame.
+- Known event names are surfaced as typed `esl-core` models.
+- Unknown but well-formed events are surfaced via `onUnknown()` as `RawEvent`.
+- Listener exceptions are contained and do not stop other listeners or crash the runtime.
 
 Listener ordering guarantees and exception policy are documented in [docs/async-model.md](docs/async-model.md).
 
@@ -193,7 +201,16 @@ $client->subscriptions()->subscribe('BACKGROUND_JOB');
 $client->subscriptions()->subscribeAll();
 ```
 
-Active subscriptions are restored automatically after reconnect. See [docs/reconnect-model.md](docs/reconnect-model.md).
+Current subscription/filter contract:
+
+- The baseline is explicit and caller-owned. The runtime does not silently subscribe to a broad event set for application code.
+- Subscription and filter mutations are rejected before successful authentication and after disconnect.
+- The runtime tracks desired active subscriptions and filters in memory for future reconnect restore work.
+- Duplicate subscribe/filter-add operations are idempotent no-ops.
+- Unsubscribing an inactive event name or removing a missing filter is a no-op.
+- `subscribeAll()` is supported, but unsubscribing specific names while subscribed to all is rejected in the current implementation because this phase does not model "all except X".
+
+Reconnect-aware restore remains planned work only. The current milestone implements live-session subscription and filter control, not replay or resubscription after reconnect.
 
 ---
 
@@ -213,7 +230,7 @@ $retry = new \Apntalk\EslReact\Config\RetryPolicy(
 $retry = RetryPolicy::disabled();
 ```
 
-On disconnect, inflight `api` commands are rejected with `ConnectionLostException`. Pending `bgapi` jobs survive reconnect and are matched when their completion events arrive. Subscriptions and filters are restored by the `ResubscriptionPlanner`.
+On disconnect, inflight `api` commands are rejected with `ConnectionLostException`. Reconnect supervision and reconnect-aware subscription/filter restore are not implemented in the current runtime slice.
 
 Full behavior is documented in [docs/reconnect-model.md](docs/reconnect-model.md).
 

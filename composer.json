@@ -39,17 +39,6 @@
             "Apntalk\\EslReact\\Tests\\": "tests/"
         }
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../esl-core",
-            "options": {
-                "versions": {
-                    "apntalk/esl-core": "0.2.0"
-                }
-            }
-        }
-    ],
     "scripts": {
         "test": "phpunit --no-coverage",
         "test-unit": "phpunit --no-coverage --testsuite Unit",

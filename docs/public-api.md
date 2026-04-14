@@ -4,7 +4,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
-Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, close-based `disconnect()`, event stream attachment, and health snapshots. Reconnect supervision, heartbeat-driven liveness orchestration, replay hooks, and subscription restoration remain planned work and should be treated as provisional.
+Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, close-based `disconnect()`, live typed event delivery, unknown-event handling, and health snapshots. Reconnect supervision, heartbeat-driven liveness orchestration, replay hooks, explicit subscription replay, and subscription restoration remain planned work and should be treated as provisional.
 
 ---
 
@@ -57,9 +57,17 @@ Apntalk\EslReact\Contracts\EventStreamInterface
 
 | Method | Description |
 |---|---|
-| `onRawEnvelope(callable $listener): void` | Register a raw envelope listener |
-| `onEvent(string $eventClass, callable $listener): void` | Register a typed event listener |
-| `onUnknown(callable $listener): void` | Register a listener for unrecognized event types |
+| `onRawEnvelope(callable $listener): void` | Register a raw inbound event-envelope listener |
+| `onEvent(string $eventName, callable $listener): void` | Register a typed listener keyed by ESL event name such as `CHANNEL_CREATE` |
+| `onAnyEvent(callable $listener): void` | Register a listener for all known typed events |
+| `onUnknown(callable $listener): void` | Register a listener for well-formed but unmapped events surfaced as `RawEvent` |
+
+Current event-stream notes:
+
+- Raw envelope listeners and typed/unknown listeners can observe the same inbound event frame.
+- Raw envelope delivery happens before typed or unknown listener dispatch.
+- `onAnyEvent()` currently observes known typed events only; unknown events stay on the explicit unknown path.
+- Listener exceptions are contained and currently written to stderr by the internal default handler.
 
 See [docs/async-model.md](async-model.md) for ordering guarantees and listener exception policy.
 
@@ -78,7 +86,14 @@ Apntalk\EslReact\Contracts\SubscriptionManagerInterface
 | `removeFilter(string $header, string $value): PromiseInterface<void>` | Remove an inbound filter |
 | `activeEventNames(): array<string>` | List currently active event-name subscriptions |
 
-Subscriptions and filters are tracked locally. Automatic restoration after reconnect is planned, not implemented in this pass.
+Current subscription/filter notes:
+
+- The baseline is explicit and caller-owned; the runtime does not invent a broad default application subscription policy.
+- Mutations are only allowed while the runtime is authenticated and not draining.
+- Desired active subscriptions and filters are tracked locally in memory.
+- Duplicate subscribe/filter-add operations and removal of missing state are idempotent no-ops.
+- `subscribeAll()` is supported, but specific unsubscribe from the "all events" state is rejected in the current implementation.
+- Automatic restoration after reconnect is planned, not implemented in this pass.
 
 ### HealthReporterInterface
 
