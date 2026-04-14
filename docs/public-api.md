@@ -4,7 +4,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
-Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, close-based `disconnect()`, live typed event delivery, unknown-event handling, and health snapshots. Reconnect supervision, heartbeat-driven liveness orchestration, replay hooks, explicit subscription replay, and subscription restoration remain planned work and should be treated as provisional.
+Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, close-based `disconnect()`, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, and health snapshots. Replay hooks, backpressure-policy expansion, and broader heartbeat orchestration remain provisional.
 
 ---
 
@@ -38,6 +38,8 @@ Current contract notes for the implemented slice:
 - `connect()` rejects with `AuthenticationException` for auth rejection, `CommandTimeoutException` for handshake timeout, and `ConnectionException` for transport or malformed-handshake failures.
 - `api()` is illegal before successful authentication and rejects with `ConnectionException`.
 - Inflight `api()` calls reject with `ConnectionLostException` if the socket closes before their reply arrives.
+- `api()` and subscription/filter mutations are rejected while the runtime is recovering after an unexpected disconnect.
+- `disconnect()` is terminal for the runtime instance; it does not trigger reconnect.
 
 | Method | Return type | Description |
 |---|---|---|
@@ -93,7 +95,7 @@ Current subscription/filter notes:
 - Desired active subscriptions and filters are tracked locally in memory.
 - Duplicate subscribe/filter-add operations and removal of missing state are idempotent no-ops.
 - `subscribeAll()` is supported, but specific unsubscribe from the "all events" state is rejected in the current implementation.
-- Automatic restoration after reconnect is planned, not implemented in this pass.
+- After a successful reconnect, the runtime restores `subscribeAll()` or the named desired event set first, then restores desired filters.
 
 ### HealthReporterInterface
 
@@ -105,6 +107,12 @@ Apntalk\EslReact\Contracts\HealthReporterInterface
 |---|---|---|
 | `snapshot()` | `HealthSnapshot` | Return a point-in-time health snapshot |
 | `isLive()` | `bool` | Whether the heartbeat monitor considers the connection alive |
+
+Current health notes:
+
+- `snapshot()->connectionState` transitions through `Reconnecting` during unexpected disconnect recovery.
+- `snapshot()->reconnectAttempts` reflects retry attempts since the last successful authenticated connection and resets to zero after recovery succeeds.
+- `snapshot()->isLive` is driven by the currently implemented minimal heartbeat monitor. A false value may mean either a degraded but still-authenticated connection or a disconnected/recovering runtime.
 
 ---
 

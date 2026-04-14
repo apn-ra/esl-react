@@ -40,11 +40,14 @@ When `ConnectionState` is `Authenticated`, `SessionState` will be `Active`. When
 
 Type: `bool`
 
-Whether the heartbeat monitor considers the connection alive. `true` when the last heartbeat was acknowledged within the configured timeout period.
+Whether the heartbeat monitor currently considers the runtime live.
 
-`false` does not immediately mean the connection is lost — it means the heartbeat has not been acknowledged recently. This can indicate a congested or degraded FreeSWITCH instance. `ConnectionState` may still be `Authenticated` when `isLive` is `false`.
+Implemented meaning in the current slice:
 
-When heartbeat monitoring is disabled (`HeartbeatConfig::$enabled = false`), this field is always `true`.
+- `true` when inbound traffic or a heartbeat probe response has kept the connection inside the configured liveness window
+- `false` when the connection has gone idle long enough to degrade liveness, or when the runtime is disconnected/recovering
+
+`false` does not immediately mean the socket has closed. During the first missed liveness window, `ConnectionState` may still be `Authenticated` while `isLive` is `false`.
 
 ---
 
@@ -70,7 +73,7 @@ The number of `bgapi` jobs that have been dispatched and are awaiting their `BAC
 
 Type: `array<string>`
 
-The list of event names currently subscribed, as tracked by `SubscriptionManager`. This reflects what is recorded in memory, not necessarily what has been confirmed by FreeSWITCH in the current connection. After a reconnect, this list represents the target subscription set that `ResubscriptionPlanner` will restore.
+The list of event names currently subscribed, as tracked by `SubscriptionManager`. This reflects the in-memory desired state. After a reconnect, this list is the target set the runtime restores onto the new session.
 
 ---
 
@@ -78,7 +81,7 @@ The list of event names currently subscribed, as tracked by `SubscriptionManager
 
 Type: `int`
 
-The number of reconnect attempts made since the last successful connection. Resets to zero when `ConnectionState` transitions to `Authenticated` successfully. Incremented each time the supervisor starts a new connection attempt after a disconnect.
+The number of reconnect attempts made since the last successful authenticated connection. Resets to zero when recovery succeeds. Incremented each time the supervisor starts a new retry attempt after an unexpected disconnect or transient connect failure.
 
 ---
 
@@ -86,7 +89,7 @@ The number of reconnect attempts made since the last successful connection. Rese
 
 Type: `bool`
 
-Whether the runtime is currently in drain mode. `true` when `ConnectionState` is `Draining`. In this state, new commands are rejected with `DrainException`, and the runtime is waiting for inflight operations to complete before closing.
+Whether the runtime is currently in drain mode. `true` when `ConnectionState` is `Draining`. In this state, new commands are rejected and the runtime is closing explicitly rather than recovering.
 
 ---
 
@@ -94,7 +97,7 @@ Whether the runtime is currently in drain mode. `true` when `ConnectionState` is
 
 Type: `?string`
 
-The fully-qualified class name of the most recent exception encountered by the runtime, or `null` if no error has occurred. This is updated when connection failures, auth failures, command timeouts, or listener exceptions are recorded.
+The fully-qualified class name of the most recent exception encountered by the runtime, or `null` if no error has occurred. This is updated when connection failures, auth failures, handshake failures, command timeouts, or liveness-triggered disconnects are recorded.
 
 ---
 
@@ -118,7 +121,7 @@ Unix timestamp in microseconds when this snapshot was taken. Use this to determi
 
 Type: `?int`
 
-Unix timestamp in microseconds when the last heartbeat acknowledgment was received, or `null` if no heartbeat has been received since the runtime started. When `HeartbeatConfig::$enabled` is `false`, this field is always `null`.
+Unix timestamp in microseconds when the most recent inbound activity was recorded by the heartbeat monitor, or `null` if no inbound frame has been seen since the current runtime started.
 
 ---
 
@@ -129,8 +132,9 @@ Unix timestamp in microseconds when the last heartbeat acknowledgment was receiv
 | connectionState | isLive | Meaning |
 |---|---|---|
 | `Authenticated` | `true` | Fully operational |
-| `Authenticated` | `false` | Connected but heartbeat degraded; FreeSWITCH may be under load |
-| `Reconnecting` | `false` | Disconnected, retrying |
+| `Authenticated` | `false` | Connected but liveness degraded; a probe may be in progress |
+| `Reconnecting` | `false` | Disconnected, waiting for the next retry attempt |
+| `Connecting` | `false` | Retry timer has fired and a new socket attempt is underway |
 | `Disconnected` | `false` | Not connected, no retry pending |
 
 Consumers that need to gate work on runtime health should check both fields.

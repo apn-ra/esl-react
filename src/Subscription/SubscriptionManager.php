@@ -165,6 +165,52 @@ final class SubscriptionManager implements SubscriptionManagerInterface
     }
 
     /**
+     * Replay the currently desired subscription and filter state onto a newly
+     * authenticated live session.
+     *
+     * @return PromiseInterface<void>
+     */
+    public function restoreDesiredState(): PromiseInterface
+    {
+        /** @var PromiseInterface<void> $promise */
+        $promise = $this->resolvedVoid();
+
+        if ($this->activeSubscriptions->isSubscribedAll()) {
+            $promise = $promise->then(function (): PromiseInterface {
+                return ($this->dispatchCommand)(
+                    EventSubscriptionCommand::all(),
+                    'event plain all',
+                    $this->timeoutSeconds,
+                )->then(static fn (): null => null);
+            });
+        } elseif ($this->activeSubscriptions->eventNames() !== []) {
+            $desired = $this->activeSubscriptions->eventNames();
+            $promise = $promise->then(function () use ($desired): PromiseInterface {
+                return ($this->dispatchCommand)(
+                    EventSubscriptionCommand::forNames($desired),
+                    'event plain ' . implode(' ', $desired),
+                    $this->timeoutSeconds,
+                )->then(static fn (): null => null);
+            });
+        }
+
+        foreach ($this->filters->all() as $filter) {
+            $promise = $promise->then(function () use ($filter): PromiseInterface {
+                return ($this->dispatchCommand)(
+                    FilterCommand::add($filter['headerName'], $filter['headerValue']),
+                    sprintf('filter %s %s', $filter['headerName'], $filter['headerValue']),
+                    $this->timeoutSeconds,
+                )->then(static fn (): null => null);
+            });
+        }
+
+        /** @var PromiseInterface<void> $restored */
+        $restored = $promise->then(static fn (): null => null);
+
+        return $restored;
+    }
+
+    /**
      * @return PromiseInterface<void>
      */
     private function resolvedVoid(): PromiseInterface

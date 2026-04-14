@@ -1,13 +1,14 @@
 # Runtime lifecycle
 
-Status note: the connect/auth state transitions documented here are implemented in this pass. Reconnecting and full drain completion are still planned and are not yet exercised by the test suite.
+Status note: the connect/auth state transitions, unexpected-disconnect reconnect flow, and desired subscription/filter restoration documented here are implemented in this pass. Full drain completion, replay hooks, and broader heartbeat orchestration are still planned.
 
 Hardening note for the implemented slice:
 
 - If `disconnect()` is called while `connect()` is still pending, the pending connect promise is rejected and the runtime moves to `Closed`/`Disconnected`.
 - If the connect/auth handshake does not complete before the current handshake timeout budget, `connect()` rejects with `CommandTimeoutException`, the runtime returns to `Disconnected`, and `SessionState` becomes `Failed`.
 - Unexpected or malformed inbound frames during the handshake fail closed and reject `connect()`.
-- After authentication succeeds, inbound event frames are delivered immediately on the live socket without reconnect-aware buffering or subscription replay.
+- After authentication succeeds, inbound event frames are delivered immediately on the live socket.
+- After an unexpected disconnect and successful re-authentication, the runtime restores the in-memory desired subscription baseline first and then restores filters before transitioning back to `Authenticated`/`Active`.
 
 ## State machines
 
@@ -21,14 +22,14 @@ The runtime maintains two parallel state machines: `ConnectionState` and `Sessio
 
 | State | Meaning |
 |---|---|
-| `Disconnected` | No active connection. Initial state before `connect()` is called, and the state entered after a clean disconnect or after all reconnect attempts are exhausted. |
+| `Disconnected` | No active connection. Initial state before `connect()` is called, and the state entered after reconnect attempts are exhausted or a non-retryable failure occurs. |
 | `Connecting` | TCP connection is being established. |
 | `Connected` | TCP connection is established; authentication has not yet started or completed. |
 | `Authenticating` | The ESL auth challenge has been received and credentials are being sent. |
 | `Authenticated` | Authentication succeeded. The runtime is ready to send commands and receive events. |
 | `Reconnecting` | The connection was lost and the supervisor is executing a retry attempt. |
 | `Draining` | The runtime has been asked to shut down. New commands are rejected. The runtime is waiting for inflight operations to complete. |
-| `Closed` | The runtime has been permanently stopped. No further reconnects will occur. |
+| `Closed` | The runtime has been explicitly shut down. No further reconnects will occur for this runtime instance. |
 
 ### ConnectionState transitions
 
@@ -46,13 +47,12 @@ Connected
 
 Authenticating
   -> Authenticated         on auth reply +OK
-  -> Disconnected          on auth reply -ERR (no retry or retry disabled for auth failure)
+  -> Disconnected          on auth reply -ERR (no retry for auth failure)
   -> Disconnected          on handshake timeout or malformed/unexpected inbound handshake frame
-  -> Reconnecting          on auth reply -ERR (retry enabled for auth failure)
 
 Authenticated
   -> Reconnecting          on socket error or unexpected disconnect
-  -> Draining              on drain() called
+  -> Draining              on disconnect() called
 
 Reconnecting
   -> Connecting            on next retry attempt scheduled
@@ -109,11 +109,11 @@ Each reconnect cycle creates a new session. The `SessionState` of the prior sess
 | TCP established | `Connecting` → `Connected` | — |
 | Auth-request received | `Connected` → `Authenticating` | `NotStarted` → `Authenticating` |
 | Auth reply +OK | `Authenticating` → `Authenticated` | `Authenticating` → `Active` |
-| Auth reply -ERR | `Authenticating` → `Reconnecting` or `Disconnected` | `Authenticating` → `Failed` |
+| Auth reply -ERR | `Authenticating` → `Disconnected` | `Authenticating` → `Failed` |
 | Socket error or close while Authenticated | `Authenticated` → `Reconnecting` | `Active` → `Disconnected` |
 | Retry attempt fired | `Reconnecting` → `Connecting` | — |
 | Max retries exhausted | `Reconnecting` → `Disconnected` | — |
-| `drain()` called | `Authenticated` → `Draining` | — |
+| `disconnect()` called | `Authenticated` → `Draining` | — |
 | Drain complete | `Draining` → `Closed` | `Active` → `Disconnected` |
 
 ---
@@ -127,25 +127,24 @@ In the currently implemented slice, when a connection drops (socket close, netwo
 3. All pending `api` commands that have been sent but have not received a reply are rejected with `ConnectionLostException`.
 4. Commands that are enqueued but not yet sent are also rejected with `ConnectionLostException`.
 5. Pending `bgapi` jobs that have received their acknowledgment but not their `BACKGROUND_JOB` completion event are rejected in the current implementation if the connection closes.
-6. Desired subscriptions and filters remain tracked in memory, but no reconnect-aware event replay or subscription restoration is implemented in this phase.
+6. Desired subscriptions and filters remain tracked in memory and are restored after re-authentication in this order: event baseline first, then filters.
 
 ---
 
 ## What triggers reconnect
 
-The sections below describe planned reconnect behavior from the implementation plan. Reconnect supervision is not implemented in the current tested slice.
-
 Reconnect is triggered by any transition to `Reconnecting`. This can be caused by:
 
 - Socket error (network drop, TCP reset, FreeSWITCH restart)
 - Unexpected EOF on the socket while in `Authenticated` state
-- Auth failure (if `retryPolicy.retryOnAuthFailure` is enabled)
+- TCP connect failure during an already-supervised connect/reconnect cycle
 
 Reconnect is NOT triggered by:
 
 - Calling `disconnect()` (clean disconnect, transitions to `Disconnected` then `Closed`)
-- Calling `drain()` (draining shutdown, transitions to `Draining` then `Closed`)
-- Receiving an `exit` reply to an explicit `exit` api command (classified as expected disconnect)
+- Auth failure
+- Handshake timeout
+- Malformed or unexpected inbound handshake traffic
 
 ---
 
@@ -154,23 +153,20 @@ Reconnect is NOT triggered by:
 If FreeSWITCH returns `-ERR invalid` on the auth challenge:
 
 1. `SessionState` transitions to `Failed`.
-2. `ConnectionSupervisor` checks whether `RetryPolicy::retryOnAuthFailure` is enabled.
-3. If enabled: `ConnectionState` transitions to `Reconnecting` and the retry schedule resumes.
-4. If disabled (default): `ConnectionState` transitions to `Disconnected`. No further reconnect occurs. The `connect()` promise rejects with `AuthenticationException`.
+2. `ConnectionState` transitions to `Disconnected`.
+3. No further reconnect occurs. The `connect()` promise rejects with `AuthenticationException`.
 
-The default behavior is to NOT retry on auth failure, because a bad password will fail every attempt and retrying wastes resources. Enable `retryOnAuthFailure` only in deployments where credentials may be temporarily unavailable during startup.
+The current implementation does not retry auth rejection, because a bad password is not a transient transport failure.
 
 ---
 
 ## Resubscription after reconnect
 
-This section is still planned behavior only. The current implementation does not replay subscriptions or filters after reconnect.
-
 After `ConnectionState` reaches `Authenticated` following a reconnect:
 
-1. `ResubscriptionPlanner` reads the active subscription set from `SubscriptionManager`.
-2. It issues the appropriate `event` commands to restore named subscriptions or `event all` if `subscribeAll` was active.
-3. It issues `filter` commands to restore any active filters.
-4. Only after resubscription is complete does the runtime begin delivering events to listeners.
+1. The runtime re-authenticates the ESL session.
+2. It restores `event plain all` or the named desired subscription set.
+3. It restores desired filters.
+4. Only after restore completes does the runtime transition back to `Authenticated` / `Active`.
 
-This ensures that consumers do not miss event types after reconnect due to a gap in subscriptions.
+No command or mutation queue is applied during recovery. `api()` and subscription/filter mutations fail closed until the runtime becomes authenticated again.

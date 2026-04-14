@@ -6,12 +6,12 @@ This package turns `apntalk/esl-core` into a usable long-lived async runtime: it
 
 Current implementation status:
 
-- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, health snapshots, deterministic fake-server integration tests.
-- Present but still provisional relative to the plan: `bgapi()` completion flow, explicit subscriptions on the wire, subscription restoration, reconnect supervision, heartbeat-driven liveness, explicit backpressure policy hardening, replay hooks.
+- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, health snapshots, and deterministic fake-server integration tests.
+- Present but still provisional relative to the plan: `bgapi()` completion flow, advanced heartbeat orchestration beyond the current minimal liveness probe, explicit backpressure policy hardening, replay hooks, and drain redesign.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`.
-- `disconnect()` currently closes the active socket and resolves when close is observed; full drain orchestration is still planned work.
+- `disconnect()` closes the active socket and resolves when close is observed. It is an explicit terminal shutdown for the runtime instance; automatic reconnect does not resume afterwards.
 
 ---
 
@@ -205,12 +205,11 @@ Current subscription/filter contract:
 
 - The baseline is explicit and caller-owned. The runtime does not silently subscribe to a broad event set for application code.
 - Subscription and filter mutations are rejected before successful authentication and after disconnect.
-- The runtime tracks desired active subscriptions and filters in memory for future reconnect restore work.
+- The runtime tracks desired active subscriptions and filters in memory and restores them after a successful reconnect.
 - Duplicate subscribe/filter-add operations are idempotent no-ops.
 - Unsubscribing an inactive event name or removing a missing filter is a no-op.
 - `subscribeAll()` is supported, but unsubscribing specific names while subscribed to all is rejected in the current implementation because this phase does not model "all except X".
-
-Reconnect-aware restore remains planned work only. The current milestone implements live-session subscription and filter control, not replay or resubscription after reconnect.
+- While the runtime is reconnecting, `api()` and subscription/filter mutations fail closed with `ConnectionException`.
 
 ---
 
@@ -219,18 +218,21 @@ Reconnect-aware restore remains planned work only. The current milestone impleme
 `esl-react` supervises reconnection automatically. The retry schedule is configured via `RetryPolicy`:
 
 ```php
-$retry = new \Apntalk\EslReact\Config\RetryPolicy(
-    maxAttempts: 10,
-    initialDelayMs: 500,
-    backoffMultiplier: 2.0,
-    maxDelayMs: 30_000,
-);
+$retry = RetryPolicy::withMaxAttempts(10, 0.5);
 
 // Disable reconnect entirely:
 $retry = RetryPolicy::disabled();
 ```
 
-On disconnect, inflight `api` commands are rejected with `ConnectionLostException`. Reconnect supervision and reconnect-aware subscription/filter restore are not implemented in the current runtime slice.
+Implemented reconnect contract in the current slice:
+
+- Unexpected socket close triggers bounded reconnect attempts according to `RetryPolicy`.
+- Explicit `disconnect()` does not trigger reconnect.
+- Authentication rejection does not trigger reconnect.
+- Handshake timeout and malformed handshake traffic remain fail-closed and do not enter retry.
+- After successful re-authentication, the runtime restores `subscribeAll()` or the named event set first, then restores filters, then transitions back to `Authenticated`/live.
+- Inflight `api()` commands are rejected with `ConnectionLostException` when the connection drops.
+- New `api()` calls and subscription/filter mutations are rejected while reconnect is in progress.
 
 Full behavior is documented in [docs/reconnect-model.md](docs/reconnect-model.md).
 
@@ -249,6 +251,13 @@ echo $snapshot->reconnectAttempts;
 ```
 
 Health fields and their meaning are documented in [docs/health-model.md](docs/health-model.md).
+
+Current liveness note:
+
+- When heartbeat monitoring is enabled, any inbound frame records activity.
+- If the connection goes idle past the configured window, health degrades (`isLive = false`) and the runtime issues a lightweight `api status` probe when safe.
+- If the liveness window expires again without recovery, the runtime closes the socket and falls into the normal disconnect/reconnect path.
+- This is a minimal heartbeat/liveness integration, not yet a broader orchestration layer.
 
 ---
 

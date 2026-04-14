@@ -53,7 +53,15 @@ Subscription and filter mutations use the same authenticated live-session comman
 - Duplicate subscribe/filter-add operations and removal of missing state are treated as deterministic no-ops.
 - Mutations before successful authentication, while draining, or after disconnect are rejected with `ConnectionException`.
 
-The desired subscription/filter state is intentionally kept in memory so a later reconnect phase can replay it. That replay behavior is not implemented in this phase.
+The desired subscription/filter state is intentionally kept in memory so the runtime can restore it after a successful reconnect. Broader replay semantics are still not implemented in this phase. No mutation queue exists during recovery: subscription/filter mutations attempted while reconnect is in progress reject with `ConnectionException`.
+
+## Reconnect and recovery command behavior
+
+- Unexpected socket close triggers reconnect attempts according to `RetryPolicy`.
+- Explicit `disconnect()` does not trigger reconnect.
+- Authentication rejection, malformed handshake traffic, and handshake timeout remain fail-closed and do not enter retry.
+- After successful re-authentication, the runtime restores the desired event subscription baseline first (`subscribeAll()` or the named event set), then restores desired filters, then marks the runtime live again.
+- `api()` during recovery rejects with `ConnectionException`. Commands are not queued for post-reconnect replay in this phase.
 
 ---
 
@@ -85,6 +93,8 @@ Promises returned by `api()` and `bgapi()` cannot be cancelled. Once dispatched,
 Callers that need to abandon a result may choose to ignore the resolved value, but the command will still be sent to FreeSWITCH and a reply will still be awaited internally.
 
 This constraint exists because the ESL protocol does not support request cancellation, and implementing client-side cancellation safely (without desynchronizing the serial queue) requires explicit protocol coordination that is deferred to a future version.
+
+The same applies during reconnect recovery: commands or session mutations attempted while the runtime is not authenticated are rejected rather than queued for later replay.
 
 ---
 
@@ -161,6 +171,19 @@ Exceptions thrown inside listener callbacks are caught by the event dispatch mac
 Caught exceptions are currently contained within the event dispatcher. The default internal handler writes a short message to stderr.
 
 Listener exceptions are not currently surfaced through a stable public callback or health-specific metric surface in this phase. This is intentional: containment is implemented now, richer surfacing is deferred until the package can define that contract explicitly.
+
+---
+
+## Heartbeat and liveness
+
+The current heartbeat implementation is intentionally minimal:
+
+- Every successfully parsed inbound frame records activity.
+- When the runtime stays idle beyond `HeartbeatConfig::$timeoutSeconds`, `isLive` becomes false.
+- If the runtime is authenticated, not draining, and has no command already inflight, the monitor issues a lightweight `api status` probe.
+- If liveness degrades again without recovery, the runtime closes the socket and falls into the normal disconnect/reconnect path.
+
+This is enough to expose deterministic liveness transitions in health snapshots and to trigger recovery when a connection goes silent. It is not yet a broader heartbeat orchestration layer.
 
 ---
 

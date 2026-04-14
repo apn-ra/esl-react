@@ -12,12 +12,16 @@ final class ScriptedFakeEslServer
     /** @var \Closure(ConnectionInterface): void|null */
     private ?\Closure $onConnection = null;
     private ?ConnectionInterface $activeConnection = null;
+    /** @var list<ConnectionInterface> */
+    private array $connections = [];
 
     /** @var list<callable(ConnectionInterface, string): void> */
     private array $commandHandlers = [];
 
     /** @var list<string> */
     private array $receivedCommands = [];
+    /** @var list<list<string>> */
+    private array $receivedCommandsByConnection = [];
 
     public function __construct(
         private readonly LoopInterface $loop,
@@ -28,6 +32,10 @@ final class ScriptedFakeEslServer
         $this->server = new SocketServer('127.0.0.1:0', [], $this->loop);
         $this->server->on('connection', function (ConnectionInterface $connection) use ($autoAuthRequest): void {
             $this->activeConnection = $connection;
+            $this->connections[] = $connection;
+            $connectionIndex = array_key_last($this->connections);
+            \assert(is_int($connectionIndex));
+            $this->receivedCommandsByConnection[$connectionIndex] = [];
             if ($autoAuthRequest) {
                 $this->writeFrame($connection, "Content-Type: auth/request\n\n");
             }
@@ -37,7 +45,7 @@ final class ScriptedFakeEslServer
             }
 
             $buffer = '';
-            $connection->on('data', function (string $chunk) use ($connection, &$buffer): void {
+            $connection->on('data', function (string $chunk) use ($connection, $connectionIndex, &$buffer): void {
                 $buffer .= $chunk;
 
                 while (($pos = strpos($buffer, "\n\n")) !== false) {
@@ -50,6 +58,7 @@ final class ScriptedFakeEslServer
                     }
 
                     $this->receivedCommands[] = $command;
+                    $this->receivedCommandsByConnection[$connectionIndex][] = $command;
 
                     if ($this->commandHandlers !== []) {
                         $handler = array_shift($this->commandHandlers);
@@ -96,6 +105,24 @@ final class ScriptedFakeEslServer
     public function receivedCommands(): array
     {
         return $this->receivedCommands;
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    public function receivedCommandsByConnection(): array
+    {
+        return $this->receivedCommandsByConnection;
+    }
+
+    public function connectionCount(): int
+    {
+        return count($this->connections);
+    }
+
+    public function closeActiveConnection(): void
+    {
+        $this->requireActiveConnection()->close();
     }
 
     public function close(): void

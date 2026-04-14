@@ -24,12 +24,14 @@ use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Exceptions\ConnectionLostException;
 use Apntalk\EslReact\Health\RuntimeHealthReporter;
+use Apntalk\EslReact\Heartbeat\HeartbeatMonitor;
 use Apntalk\EslReact\Heartbeat\LivenessState;
 use Apntalk\EslReact\Protocol\EnvelopePump;
 use Apntalk\EslReact\Protocol\InboundMessageRouter;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
+use Apntalk\EslReact\Supervisor\ReconnectScheduler;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use React\Promise\Deferred;
@@ -52,6 +54,10 @@ final class RuntimeClient implements AsyncEslClientInterface
     private ?RuntimeHealthReporter $health = null;
     private ?TimerInterface $connectTimeoutTimer = null;
     private bool $draining = false;
+    private bool $supervisionEnabled = false;
+    private bool $suppressReconnectOnNextClose = false;
+    private bool $reconnectScheduled = false;
+    private ?\Throwable $pendingCloseReason = null;
 
     public function __construct(
         private readonly RuntimeConfig $config,
@@ -65,8 +71,11 @@ final class RuntimeClient implements AsyncEslClientInterface
         private readonly BgapiJobTracker $bgapiTracker,
         private readonly EventStream $events,
         private readonly SubscriptionManager $subscriptions,
+        private readonly ReconnectScheduler $reconnects,
+        private readonly HeartbeatMonitor $heartbeat,
     ) {
         $this->wireProtocol();
+        $this->wireHeartbeat();
     }
 
     public function attachHealthReporter(RuntimeHealthReporter $health): void
@@ -80,39 +89,28 @@ final class RuntimeClient implements AsyncEslClientInterface
             return $this->resolvedVoid();
         }
 
+        if ($this->connectionState === ConnectionState::Closed) {
+            return reject(new ConnectionException('Runtime is closed'));
+        }
+
         if ($this->connectDeferred !== null) {
             return $this->connectDeferred->promise();
         }
 
+        if ($this->connectionState === ConnectionState::Reconnecting) {
+            $this->connectDeferred = new Deferred();
+
+            return $this->connectDeferred->promise();
+        }
+
         $this->draining = false;
+        $this->supervisionEnabled = true;
+        $this->suppressReconnectOnNextClose = false;
+        $this->pendingCloseReason = null;
         $this->commands->exitDrainMode();
-        $this->connectionState = ConnectionState::Connecting;
-        $this->sessionState = SessionState::NotStarted;
         $this->connectDeferred = new Deferred();
-        $this->startConnectTimeout();
-
-        $this->connector->connect($this->config->connectionUri())->then(
-            function (ConnectionInterface $connection): void {
-                if ($this->connectDeferred === null) {
-                    $connection->close();
-                    return;
-                }
-
-                $this->attachConnection($connection);
-            },
-            function (\Throwable $e): void {
-                $this->cancelConnectTimeout();
-                $this->connectionState = ConnectionState::Disconnected;
-                $this->sessionState = SessionState::Failed;
-                $this->livenessState = LivenessState::Dead;
-                $this->recordError($e);
-                $this->settleConnectFailure(new ConnectionException(
-                    sprintf('Failed to connect to %s: %s', $this->config->connectionUri(), $e->getMessage()),
-                    0,
-                    $e,
-                ));
-            },
-        );
+        $this->reconnects->reset();
+        $this->startConnectionAttempt();
 
         $connect = $this->connectDeferred;
         \assert($connect instanceof Deferred);
@@ -178,6 +176,10 @@ final class RuntimeClient implements AsyncEslClientInterface
 
         if ($this->connectDeferred !== null && $this->connection === null) {
             $this->draining = true;
+            $this->supervisionEnabled = false;
+            $this->reconnects->cancel();
+            $this->reconnectScheduled = false;
+            $this->heartbeat->stop();
             $this->commands->enterDrainMode();
             $this->cancelConnectTimeout();
             $this->connectionState = ConnectionState::Closed;
@@ -189,6 +191,10 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         if ($this->connection === null) {
+            $this->supervisionEnabled = false;
+            $this->reconnects->cancel();
+            $this->reconnectScheduled = false;
+            $this->heartbeat->stop();
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
@@ -196,6 +202,10 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         $this->draining = true;
+        $this->supervisionEnabled = false;
+        $this->reconnects->cancel();
+        $this->reconnectScheduled = false;
+        $this->heartbeat->stop();
         $this->commands->enterDrainMode();
         $this->connectionState = ConnectionState::Draining;
         $this->disconnectDeferred = new Deferred();
@@ -241,6 +251,11 @@ final class RuntimeClient implements AsyncEslClientInterface
         return $this->draining;
     }
 
+    public function reconnectAttempts(): int
+    {
+        return $this->reconnects->attempts();
+    }
+
     private function wireProtocol(): void
     {
         $this->router->onAuthRequest(function (): void {
@@ -257,12 +272,22 @@ final class RuntimeClient implements AsyncEslClientInterface
             if ($this->sessionState === SessionState::Authenticating) {
                 if ($reply instanceof AuthAcceptedReply) {
                     $this->cancelConnectTimeout();
-                    $this->connectionState = ConnectionState::Authenticated;
-                    $this->sessionState = SessionState::Active;
-                    $this->livenessState = LivenessState::Live;
-                    $connect = $this->connectDeferred;
-                    $this->connectDeferred = null;
-                    $connect?->resolve(null);
+                    $this->restoreDesiredStateAfterAuthentication()->then(
+                        function (): void {
+                            $this->markRuntimeLive();
+                            $connect = $this->connectDeferred;
+                            $this->connectDeferred = null;
+                            $connect?->resolve(null);
+                        },
+                        function (\Throwable $e): void {
+                            $this->recordError($e);
+                            $this->pendingCloseReason = $e;
+
+                            if ($this->connection !== null) {
+                                $this->connection->close();
+                            }
+                        },
+                    );
 
                     return;
                 }
@@ -275,6 +300,8 @@ final class RuntimeClient implements AsyncEslClientInterface
                     $error = new AuthenticationException($reply->reason());
                     $this->recordError($error);
                     $this->settleConnectFailure($error);
+                    $this->supervisionEnabled = false;
+                    $this->suppressReconnectOnNextClose = true;
                     $this->connection?->close();
 
                     return;
@@ -311,6 +338,8 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->recordError($error);
                 $this->cancelConnectTimeout();
                 $this->settleConnectFailure($error);
+                $this->supervisionEnabled = false;
+                $this->suppressReconnectOnNextClose = true;
                 $this->connection?->close();
                 return;
             }
@@ -321,6 +350,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         });
 
         $this->envelopePump->onFrame(function ($frame): void {
+            $this->heartbeat->recordActivity();
             $this->router->route($frame);
         });
 
@@ -333,6 +363,8 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->recordError($error);
                 $this->cancelConnectTimeout();
                 $this->settleConnectFailure($error);
+                $this->supervisionEnabled = false;
+                $this->suppressReconnectOnNextClose = true;
             } else {
                 $this->recordError($e);
             }
@@ -340,6 +372,44 @@ final class RuntimeClient implements AsyncEslClientInterface
             if ($this->connection !== null) {
                 $this->connection->close();
             }
+        });
+    }
+
+    private function wireHeartbeat(): void
+    {
+        $this->heartbeat->onStateChange(function (LivenessState $newState): void {
+            $this->livenessState = $newState;
+
+            if ($newState === LivenessState::Dead && $this->connection !== null && !$this->draining) {
+                $error = new ConnectionLostException('Heartbeat liveness window expired');
+                $this->recordError($error);
+                $this->pendingCloseReason = $error;
+                $connection = $this->connection;
+                \assert($connection instanceof ConnectionInterface);
+                $connection->close();
+            }
+        });
+
+        $this->heartbeat->setProbeCallback(function (): void {
+            if (
+                !$this->connectionState->canAcceptCommands()
+                || $this->draining
+                || $this->connection === null
+                || $this->commands->totalPendingCount() > 0
+            ) {
+                return;
+            }
+
+            $this->commands->dispatch(
+                new ApiCommand('status'),
+                'api status',
+                $this->config->commandTimeout->apiTimeoutSeconds,
+            )->then(
+                static fn (): null => null,
+                function (\Throwable $e): void {
+                    $this->recordError($e);
+                },
+            );
         });
     }
 
@@ -362,7 +432,10 @@ final class RuntimeClient implements AsyncEslClientInterface
 
     private function handleConnectionClosed(?\Throwable $reason = null): void
     {
+        $reason ??= $this->pendingCloseReason;
+        $this->pendingCloseReason = null;
         $this->cancelConnectTimeout();
+        $this->heartbeat->stop();
         $this->envelopePump->detach();
         $this->outbound->detach();
         $this->connection = null;
@@ -372,10 +445,17 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
         $this->livenessState = LivenessState::Dead;
         $this->commands->onConnectionLost();
-        $this->bgapiTracker->abandonAll($reason ?? new ConnectionLostException());
+        $disconnectReason = $reason ?? new ConnectionLostException();
+        $this->bgapiTracker->abandonAll($disconnectReason);
 
         if ($this->connectDeferred !== null) {
-            $this->settleConnectFailure($reason ?? new ConnectionLostException('Connection closed before auth completed'));
+            if ($this->shouldScheduleReconnect($disconnectReason)) {
+                $this->scheduleReconnect($disconnectReason);
+            } else {
+                $this->settleConnectFailure($disconnectReason);
+            }
+        } elseif ($this->shouldScheduleReconnect($disconnectReason)) {
+            $this->scheduleReconnect($disconnectReason);
         }
 
         if ($this->disconnectDeferred !== null) {
@@ -383,6 +463,8 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->disconnectDeferred = null;
             $disconnect->resolve(null);
         }
+
+        $this->suppressReconnectOnNextClose = false;
     }
 
     private function settleConnectFailure(\Throwable $e): void
@@ -402,7 +484,19 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->cancelConnectTimeout();
         $timeoutSeconds = $this->config->commandTimeout->apiTimeoutSeconds;
         $this->connectTimeoutTimer = $this->loop->addTimer($timeoutSeconds, function () use ($timeoutSeconds): void {
-            if ($this->connectDeferred === null) {
+            if (
+                $this->connectDeferred === null
+                && !in_array(
+                    $this->connectionState,
+                    [
+                        ConnectionState::Connecting,
+                        ConnectionState::Connected,
+                        ConnectionState::Authenticating,
+                        ConnectionState::Reconnecting,
+                    ],
+                    true,
+                )
+            ) {
                 return;
             }
 
@@ -411,6 +505,8 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->sessionState = SessionState::Failed;
             $this->livenessState = LivenessState::Dead;
             $this->recordError($error);
+            $this->supervisionEnabled = false;
+            $this->suppressReconnectOnNextClose = true;
             $this->settleConnectFailure($error);
 
             if ($this->connection !== null) {
@@ -438,5 +534,112 @@ final class RuntimeClient implements AsyncEslClientInterface
         $promise = resolve(null);
 
         return $promise;
+    }
+
+    private function startConnectionAttempt(): void
+    {
+        $this->draining = false;
+        $this->commands->exitDrainMode();
+        $this->connectionState = ConnectionState::Connecting;
+        $this->sessionState = SessionState::NotStarted;
+        $this->livenessState = LivenessState::Dead;
+        $this->cancelConnectTimeout();
+        $this->startConnectTimeout();
+        $this->connector->connect($this->config->connectionUri())->then(
+            function (ConnectionInterface $connection): void {
+                if ($this->connectionState === ConnectionState::Closed || !$this->supervisionEnabled) {
+                    $connection->close();
+                    return;
+                }
+
+                $this->attachConnection($connection);
+            },
+            function (\Throwable $e): void {
+                $this->cancelConnectTimeout();
+                $error = new ConnectionException(
+                    sprintf('Failed to connect to %s: %s', $this->config->connectionUri(), $e->getMessage()),
+                    0,
+                    $e,
+                );
+                $this->recordError($error);
+                $this->livenessState = LivenessState::Dead;
+
+                if ($this->shouldScheduleReconnect($error)) {
+                    $this->scheduleReconnect($error);
+                    return;
+                }
+
+                $this->connectionState = ConnectionState::Disconnected;
+                $this->sessionState = SessionState::Failed;
+                $this->settleConnectFailure($error);
+            },
+        );
+    }
+
+    private function shouldScheduleReconnect(\Throwable $reason): bool
+    {
+        if ($this->draining || !$this->supervisionEnabled || $this->suppressReconnectOnNextClose) {
+            return false;
+        }
+
+        return !$reason instanceof AuthenticationException;
+    }
+
+    private function scheduleReconnect(\Throwable $reason): void
+    {
+        if ($this->reconnectScheduled) {
+            return;
+        }
+
+        if ($this->config->retryPolicy->hasExhausted($this->reconnects->attempts())) {
+            $this->connectionState = ConnectionState::Disconnected;
+            if ($this->sessionState !== SessionState::Failed) {
+                $this->sessionState = SessionState::Disconnected;
+            }
+            $this->livenessState = LivenessState::Dead;
+            $this->settleConnectFailure($reason);
+            return;
+        }
+
+        $this->connectionState = ConnectionState::Reconnecting;
+        if ($this->sessionState !== SessionState::Failed) {
+            $this->sessionState = SessionState::Disconnected;
+        }
+        $this->livenessState = LivenessState::Dead;
+        $this->reconnectScheduled = true;
+        $this->reconnects->scheduleNext(function (): void {
+            $this->reconnectScheduled = false;
+
+            if (!$this->supervisionEnabled || $this->draining || $this->connectionState === ConnectionState::Closed) {
+                return;
+            }
+
+            $this->startConnectionAttempt();
+        });
+
+        if (!$this->reconnectScheduled && $this->config->retryPolicy->hasExhausted($this->reconnects->attempts())) {
+            $this->connectionState = ConnectionState::Disconnected;
+            $this->settleConnectFailure($reason);
+        }
+    }
+
+    /**
+     * @return PromiseInterface<void>
+     */
+    private function restoreDesiredStateAfterAuthentication(): PromiseInterface
+    {
+        return $this->subscriptions->restoreDesiredState();
+    }
+
+    private function markRuntimeLive(): void
+    {
+        $this->reconnects->recordSuccess();
+        $this->reconnectScheduled = false;
+        $this->connectionState = ConnectionState::Authenticated;
+        $this->sessionState = SessionState::Active;
+        $this->heartbeat->reset();
+        $this->heartbeat->recordActivity();
+        $this->heartbeat->start();
+        $this->livenessState = $this->heartbeat->state();
     }
 }

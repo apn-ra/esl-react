@@ -2,36 +2,31 @@
 
 ## Overview
 
-Reconnect is supervised by `ConnectionSupervisor`. When a connection is lost, the supervisor classifies the reason, determines whether a retry is appropriate, and schedules retry attempts according to `RetryPolicy`.
+Reconnect is supervised by internal runtime components. When a live connection drops unexpectedly, or when a supervised TCP connect attempt fails, the runtime schedules retry attempts according to `RetryPolicy`.
 
-The supervisor is an internal component. Consumers configure its behavior through `RetryPolicy` in `RuntimeConfig`. Consumers observe its effects through `ConnectionState`, `HealthSnapshot::$reconnectAttempts`, and the eventual resolution or rejection of the `connect()` promise.
+Consumers configure retry behavior through `RetryPolicy` in `RuntimeConfig`. Consumers observe its effects through `ConnectionState`, `HealthSnapshot::$reconnectAttempts`, and the eventual resolution or rejection of the `connect()` promise.
 
 ---
 
 ## RetryPolicy
 
 ```php
-$policy = new \Apntalk\EslReact\Config\RetryPolicy(
-    maxAttempts: 10,
-    initialDelayMs: 500,
-    backoffMultiplier: 2.0,
-    maxDelayMs: 30_000,
-);
+$policy = \Apntalk\EslReact\Config\RetryPolicy::withMaxAttempts(10, 0.5);
 ```
 
 | Property | Type | Description |
 |---|---|---|
 | `maxAttempts` | `int` | Maximum number of reconnect attempts. `0` means unlimited. |
-| `initialDelayMs` | `int` | Delay before the first reconnect attempt, in milliseconds. |
+| `initialDelaySeconds` | `float` | Delay before the first reconnect attempt, in seconds. |
 | `backoffMultiplier` | `float` | Multiplier applied to the delay after each failed attempt. |
-| `maxDelayMs` | `int` | Upper bound on the delay between attempts, in milliseconds. |
+| `maxDelaySeconds` | `float` | Upper bound on the delay between attempts, in seconds. |
 
-Delay for attempt N is: `min(initialDelayMs * (backoffMultiplier ^ (N-1)), maxDelayMs)`.
+Delay for attempt N is: `min(initialDelaySeconds * (backoffMultiplier ^ (N-1)), maxDelaySeconds)`.
 
 ### Named constructors
 
 ```php
-RetryPolicy::default()   // 10 attempts, 500ms initial, 2x multiplier, 30s max
+RetryPolicy::default()   // unlimited attempts, 1.0s initial, 2x multiplier, 60s max
 RetryPolicy::disabled()  // No reconnect. Any disconnect is permanent.
 ```
 
@@ -39,20 +34,20 @@ Use `RetryPolicy::disabled()` in testing environments or in deployments where a 
 
 ---
 
-## Disconnect classification
+## Reconnect trigger policy
 
-Before scheduling a reconnect, `DisconnectClassifier` examines the reason for the disconnect:
+Before scheduling a reconnect, the runtime classifies the failure:
 
 | Disconnect reason | Classification | Default reconnect behavior |
 |---|---|---|
-| `exit` command reply received | Expected disconnect | No reconnect |
-| Clean `disconnect()` or `drain()` call | Intentional shutdown | No reconnect |
-| TCP error (ECONNREFUSED, ECONNRESET, timeout) | Network error | Reconnect with backoff |
+| Clean `disconnect()` call | Intentional shutdown | No reconnect |
+| TCP error / connect failure | Network error | Reconnect with backoff |
 | Unexpected EOF | Network error | Reconnect with backoff |
-| FreeSWITCH process restart detected | Network error | Reconnect with backoff |
-| Auth reply `-ERR` | Auth failure | Configurable (default: no reconnect) |
+| Auth reply `-ERR` | Auth failure | No reconnect |
+| Handshake timeout | Handshake failure | No reconnect |
+| Malformed or unexpected handshake traffic | Protocol failure | No reconnect |
 
-Expected and intentional disconnects bypass the retry schedule entirely. The `ConnectionState` transitions to `Disconnected` (not `Reconnecting`) and no retry timer is set.
+Intentional shutdowns and non-retryable handshake/auth failures bypass the retry schedule entirely.
 
 ---
 
@@ -65,28 +60,22 @@ When a network error disconnect is classified:
 3. The scheduler computes the delay for this attempt using the backoff formula.
 4. After the delay, `ConnectionState` transitions to `Connecting` and a new TCP connection is attempted.
 5. If the connection succeeds and auth succeeds, the attempt counter resets to zero.
-6. If the connection or auth fails again, the cycle repeats from step 2.
+6. If the connection fails again or the reconnecting socket closes unexpectedly before recovery completes, the cycle repeats from step 2.
 7. If `maxAttempts` is reached and the attempt fails, `ConnectionState` transitions to `Disconnected` and no further retries occur.
 
 The `connect()` promise (if the caller is still awaiting it) does not reject during intermediate retries. It rejects only when `maxAttempts` is exhausted or a non-retryable failure occurs.
 
 ---
 
-## Auth failure behavior
+## Auth and handshake failure behavior
 
-Auth failures can be caused by a wrong password, a FreeSWITCH configuration change, or a race condition during startup.
+The current implementation does not retry:
 
-By default (`retryOnAuthFailure: false`):
+- auth rejection
+- connect/auth handshake timeout
+- malformed or unexpected inbound handshake frames
 
-- The supervisor does not retry.
-- `ConnectionState` transitions to `Disconnected`.
-- The `connect()` promise rejects with `AuthenticationException`.
-
-When `retryOnAuthFailure: true`:
-
-- The supervisor treats auth failure like a network error and schedules a retry.
-- This is appropriate when credentials may become valid after a brief delay (e.g., startup sequencing).
-- Note that if the password is simply wrong, unlimited retries will loop indefinitely unless `maxAttempts` is set.
+These cases fail closed, transition the runtime to `Disconnected`, and reject the pending `connect()` promise when one exists.
 
 ---
 
@@ -104,16 +93,7 @@ There is no automatic retry for inflight commands. The caller is responsible for
 
 ## Pending bgapi jobs on disconnect and reconnect
 
-`bgapi` job promises behave differently from `api` on disconnect:
-
-- Pending bgapi jobs that have received their FreeSWITCH acknowledgment are NOT rejected on disconnect.
-- Their promises remain open across the reconnect cycle.
-- When FreeSWITCH reconnects and resumes processing, it may emit a `BACKGROUND_JOB` completion event with the original Job-UUID.
-- `BgapiCompletionMatcher` matches that event to the still-open handle and resolves its promise.
-
-This behavior is possible because FreeSWITCH assigns Job-UUIDs before processing begins, and may complete jobs even if the ESL connection drops and is reestablished.
-
-If the completion event never arrives (job was lost on the FreeSWITCH side), the bgapi job will eventually time out and its promise will reject with `CommandTimeoutException`. The timeout is configured via `CommandTimeoutConfig::$bgapiCompletionTimeoutMs`.
+`bgapi` job handling remains provisional relative to the implementation plan. The current reconnect pass does not expand its behavior beyond abandoning pending tracked jobs on connection loss.
 
 ---
 
@@ -123,23 +103,22 @@ Active subscriptions and filters are tracked by `SubscriptionManager` in memory.
 
 After `ConnectionState` reaches `Authenticated` following a reconnect:
 
-1. `ResubscriptionPlanner` reads the current subscription set.
-2. It issues the required `event` commands to restore named subscriptions.
-3. It issues any required `filter` commands to restore active filters.
-4. Event delivery to listeners resumes only after resubscription is confirmed.
+1. The runtime re-authenticates the session.
+2. It restores `event plain all` or the named desired event set.
+3. It restores the desired filters.
+4. Only after restore succeeds does the runtime transition back to `Authenticated` / `Active`.
 
-This prevents a window after reconnect where event types are not yet subscribed.
-
-If a subscription command fails during resubscription, the error is surfaced via the listener error handler but the runtime remains running. The failed subscription may be missing until the next reconnect or until the consumer manually calls `subscribe()` again.
+If recovery is in progress, new `api()` calls and subscription/filter mutations fail closed instead of being queued for later replay.
 
 ---
 
 ## Supervisor lifecycle
 
-The `ConnectionSupervisor` starts when `connect()` is called and stops when:
+Reconnect supervision starts when `connect()` is called and stops when:
 
 - `disconnect()` is called
-- `drain()` is called and the drain completes
+- auth rejection occurs
+- a handshake timeout or malformed handshake failure occurs
 - `maxAttempts` is exhausted
 
-After the supervisor stops, `ConnectionState` is either `Disconnected` or `Closed`. No further reconnects will occur without creating a new runtime instance.
+After supervision stops, `ConnectionState` is either `Disconnected` or `Closed`. No further reconnects occur for that runtime instance unless the caller creates or reconnects a new one explicitly.

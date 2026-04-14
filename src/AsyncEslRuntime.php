@@ -16,6 +16,8 @@ use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Events\EventStream;
 use Apntalk\EslReact\Health\RuntimeHealthReporter;
+use Apntalk\EslReact\Heartbeat\HeartbeatMonitor;
+use Apntalk\EslReact\Heartbeat\IdleTimer;
 use Apntalk\EslReact\Protocol\EnvelopePump;
 use Apntalk\EslReact\Protocol\FrameReader;
 use Apntalk\EslReact\Protocol\FrameWriter;
@@ -25,6 +27,7 @@ use Apntalk\EslReact\Runtime\RuntimeClient;
 use Apntalk\EslReact\Subscription\ActiveSubscriptionSet;
 use Apntalk\EslReact\Subscription\FilterManager;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
+use Apntalk\EslReact\Supervisor\ReconnectScheduler;
 use React\EventLoop\Loop;
 use React\EventLoop\LoopInterface;
 use React\Socket\Connector;
@@ -55,6 +58,8 @@ final class AsyncEslRuntime
             },
             ackTimeoutSeconds: $config->commandTimeout->bgapiAckTimeoutSeconds,
         );
+        $idleTimer = new IdleTimer();
+        $heartbeat = new HeartbeatMonitor($config->heartbeat, $idleTimer, $loop);
         $subscriptions = new SubscriptionManager(
             activeSubscriptions: new ActiveSubscriptionSet(),
             filters: new FilterManager(),
@@ -83,6 +88,8 @@ final class AsyncEslRuntime
             bgapiTracker: $bgapiTracker,
             events: $eventStream,
             subscriptions: $subscriptions,
+            reconnects: new ReconnectScheduler($config->retryPolicy, $loop),
+            heartbeat: $heartbeat,
         );
 
         $health = new RuntimeHealthReporter(
@@ -92,9 +99,9 @@ final class AsyncEslRuntime
             inflightCountProvider: static fn () => $client->inflightCommandCount(),
             bgapiPendingCountProvider: static fn () => $bgapiTracker->pendingCount(),
             subscriptionsProvider: static fn () => $subscriptions->activeEventNames(),
-            reconnectAttemptsProvider: static fn () => 0,
+            reconnectAttemptsProvider: static fn () => $client->reconnectAttempts(),
             drainingProvider: static fn () => $client->isDraining(),
-            lastHeartbeatProvider: static fn () => null,
+            lastHeartbeatProvider: static fn () => $heartbeat->lastHeartbeatAtMicros(),
         );
 
         $client->attachHealthReporter($health);
