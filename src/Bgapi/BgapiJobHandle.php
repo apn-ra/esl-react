@@ -5,9 +5,10 @@ use React\Promise\PromiseInterface;
 final class BgapiJobHandle {
     /**
      * @param PromiseInterface<\Apntalk\EslCore\Events\BackgroundJobEvent> $promise
+     * @param \Closure(): string $jobUuidProvider
      */
     public function __construct(
-        private readonly string $jobUuid,
+        private readonly \Closure $jobUuidProvider,
         private readonly string $eslCommand,
         private readonly string $eslArgs,
         private readonly float $dispatchedAtMicros,
@@ -15,7 +16,7 @@ final class BgapiJobHandle {
     ) {}
 
     public function jobUuid(): string {
-        return $this->jobUuid;
+        return ($this->jobUuidProvider)();
     }
 
     public function eslCommand(): string {

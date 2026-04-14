@@ -29,19 +29,21 @@ final class BgapiDispatcher
         $bgapiCommand = new BgapiCommand($command, $args);
         $jobDeferred = new Deferred();
         $dispatchedAt = (float) (microtime(true) * 1_000_000);
+        $jobUuid = '';
 
         $ackPromise = ($this->sendCommandReply)($bgapiCommand, "bgapi {$command}", $this->ackTimeoutSeconds);
 
         $ackPromise->then(
-            function (mixed $reply) use ($command, $args, $jobDeferred, $dispatchedAt): void {
+            function (mixed $reply) use ($command, $args, $jobDeferred, $dispatchedAt, &$jobUuid): void {
                 if (!($reply instanceof BgapiAcceptedReply)) {
                     $jobDeferred->reject(new \RuntimeException(
                         "bgapi {$command}: ack was not BgapiAcceptedReply, got " . get_class($reply),
                     ));
                     return;
                 }
+                $jobUuid = $reply->jobUuid();
                 $pending = new PendingBgapiJob(
-                    $reply->jobUuid(),
+                    $jobUuid,
                     $command,
                     $args,
                     $jobDeferred,
@@ -55,7 +57,9 @@ final class BgapiDispatcher
         );
 
         return new BgapiJobHandle(
-            jobUuid: '',
+            jobUuidProvider: static function () use (&$jobUuid): string {
+                return $jobUuid;
+            },
             eslCommand: $command,
             eslArgs: $args,
             dispatchedAtMicros: $dispatchedAt,

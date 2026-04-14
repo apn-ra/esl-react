@@ -148,6 +148,14 @@ final class ScriptedFakeEslServer
         );
     }
 
+    public function writeBgapiAcceptedReply(ConnectionInterface $connection, string $jobUuid): void
+    {
+        $this->writeFrame(
+            $connection,
+            sprintf("Content-Type: command/reply\nReply-Text: +OK Job-UUID: %s\n\n", $jobUuid),
+        );
+    }
+
     public function writeRawFrame(ConnectionInterface $connection, string $frame): void
     {
         $this->writeFrame($connection, $frame);
@@ -172,6 +180,20 @@ final class ScriptedFakeEslServer
         );
 
         $this->writeFrame($connection, $frame);
+    }
+
+    public function emitBackgroundJobEvent(string $jobUuid, string $result, ?string $jobCommand = null): void
+    {
+        $headers = [
+            'Event-Name' => 'BACKGROUND_JOB',
+            'Job-UUID' => $jobUuid,
+        ];
+
+        if ($jobCommand !== null) {
+            $headers['Job-Command'] = $jobCommand;
+        }
+
+        $this->emitPlainEvent($headers, $result);
     }
 
     private function writeFrame(ConnectionInterface $connection, string $frame): void

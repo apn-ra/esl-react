@@ -93,7 +93,12 @@ There is no automatic retry for inflight commands. The caller is responsible for
 
 ## Pending bgapi jobs on disconnect and reconnect
 
-`bgapi` job handling remains provisional relative to the implementation plan. The current reconnect pass does not expand its behavior beyond abandoning pending tracked jobs on connection loss.
+Accepted bgapi jobs remain tracked across unexpected supervised reconnect.
+
+- Reconnect itself does not resolve them.
+- A later `BACKGROUND_JOB` event with the same `Job-UUID` can still resolve them after reconnect.
+- If no matching completion arrives before `bgapiOrphanTimeoutSeconds`, they reject with `CommandTimeoutException`.
+- Explicit `disconnect()` is terminal and rejects pending bgapi jobs instead of keeping them open.
 
 ---
 

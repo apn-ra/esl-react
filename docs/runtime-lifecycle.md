@@ -126,7 +126,7 @@ In the currently implemented slice, when a connection drops (socket close, netwo
 2. `SessionState` transitions to `Disconnected`.
 3. All pending `api` commands that have been sent but have not received a reply are rejected with `ConnectionLostException`.
 4. Commands that are enqueued but not yet sent are also rejected with `ConnectionLostException`.
-5. Pending `bgapi` jobs that have received their acknowledgment but not their `BACKGROUND_JOB` completion event are rejected in the current implementation if the connection closes.
+5. Pending `bgapi` jobs that have already been accepted remain tracked across unexpected supervised reconnect. They are rejected only on explicit shutdown or when their orphan timeout expires.
 6. Desired subscriptions and filters remain tracked in memory and are restored after re-authentication in this order: event baseline first, then filters.
 
 ---

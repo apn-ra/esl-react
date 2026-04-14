@@ -32,12 +32,14 @@ If a command cannot be accepted (e.g., backpressure limit reached, runtime is dr
 
 ### bgapi commands
 
-`bgapi` commands use a separate dispatch path and do not share the serial api queue.
+`bgapi` commands share the serialized command/reply path for their initial acceptance reply, but their eventual completion is tracked separately from `api()`.
 
-- The runtime issues the `bgapi` command to FreeSWITCH immediately and receives a short acknowledgment reply.
-- A `BgapiJobHandle` is returned to the caller synchronously (before the promise resolves).
-- The handle's promise resolves when a `BACKGROUND_JOB` event carrying the matching Job-UUID arrives.
+- The runtime issues the `bgapi` command through the same serialized command/reply path used for other live-session command/reply interactions and waits for a short acceptance reply carrying a `Job-UUID`.
+- A `BgapiJobHandle` is returned to the caller synchronously before that acceptance reply has necessarily arrived.
+- `BgapiJobHandle::jobUuid()` stays empty until the bgapi acceptance reply is observed.
+- The handle's promise resolves only when a `BACKGROUND_JOB` event carrying the matching `Job-UUID` arrives.
 - Multiple `bgapi` commands may be outstanding simultaneously.
+- Completions are correlated strictly by `Job-UUID`; out-of-order completion is supported.
 
 See [bgapi-tracking.md](bgapi-tracking.md) for full bgapi behavior.
 
@@ -62,6 +64,7 @@ The desired subscription/filter state is intentionally kept in memory so the run
 - Authentication rejection, malformed handshake traffic, and handshake timeout remain fail-closed and do not enter retry.
 - After successful re-authentication, the runtime restores the desired event subscription baseline first (`subscribeAll()` or the named event set), then restores desired filters, then marks the runtime live again.
 - `api()` during recovery rejects with `ConnectionException`. Commands are not queued for post-reconnect replay in this phase.
+- `bgapi()` during recovery also rejects with `ConnectionException`. Pending bgapi jobs that were already accepted remain tracked separately.
 
 ---
 
@@ -71,15 +74,16 @@ Command timeouts are configured via `CommandTimeoutConfig`.
 
 ```php
 $config = new \Apntalk\EslReact\Config\CommandTimeoutConfig(
-    apiTimeoutMs: 5_000,
-    bgapiAckTimeoutMs: 2_000,
-    bgapiCompletionTimeoutMs: 60_000,
+    apiTimeoutSeconds: 5.0,
+    bgapiAckTimeoutSeconds: 2.0,
+    subscriptionTimeoutSeconds: 5.0,
+    bgapiOrphanTimeoutSeconds: 60.0,
 );
 ```
 
-- If an `api` command does not receive a reply within `apiTimeoutMs`, its promise is rejected with `CommandTimeoutException`.
-- If a `bgapi` acknowledgment is not received within `bgapiAckTimeoutMs`, the handle's promise is rejected with `CommandTimeoutException`.
-- If a `bgapi` completion event is not received within `bgapiCompletionTimeoutMs`, the handle's promise is rejected with `CommandTimeoutException`.
+- If an `api` command does not receive a reply within `apiTimeoutSeconds`, its promise is rejected with `CommandTimeoutException`.
+- If a `bgapi` acknowledgment is not received within `bgapiAckTimeoutSeconds`, the handle's promise is rejected with `CommandTimeoutException`.
+- If a `bgapi` completion event is not received within `bgapiOrphanTimeoutSeconds`, the handle's promise is rejected with `CommandTimeoutException`.
 - After timeout, any late reply or completion that arrives for the timed-out operation is silently discarded.
 
 ---
@@ -94,7 +98,7 @@ Callers that need to abandon a result may choose to ignore the resolved value, b
 
 This constraint exists because the ESL protocol does not support request cancellation, and implementing client-side cancellation safely (without desynchronizing the serial queue) requires explicit protocol coordination that is deferred to a future version.
 
-The same applies during reconnect recovery: commands or session mutations attempted while the runtime is not authenticated are rejected rather than queued for later replay.
+The same applies during reconnect recovery: new commands or session mutations attempted while the runtime is not authenticated are rejected rather than queued for later replay. Already-accepted bgapi jobs are an exception: they remain pending until matching completion, timeout, or explicit shutdown.
 
 ---
 

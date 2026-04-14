@@ -446,7 +446,11 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->livenessState = LivenessState::Dead;
         $this->commands->onConnectionLost();
         $disconnectReason = $reason ?? new ConnectionLostException();
-        $this->bgapiTracker->abandonAll($disconnectReason);
+        if ($this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason)) {
+            $this->bgapiTracker->retainPendingAcrossReconnect();
+        } else {
+            $this->bgapiTracker->abandonAll($disconnectReason);
+        }
 
         if ($this->connectDeferred !== null) {
             if ($this->shouldScheduleReconnect($disconnectReason)) {
@@ -629,6 +633,15 @@ final class RuntimeClient implements AsyncEslClientInterface
     private function restoreDesiredStateAfterAuthentication(): PromiseInterface
     {
         return $this->subscriptions->restoreDesiredState();
+    }
+
+    private function shouldKeepBgapiPendingAcrossDisconnect(\Throwable $reason): bool
+    {
+        if ($this->draining || !$this->supervisionEnabled || $this->suppressReconnectOnNextClose) {
+            return false;
+        }
+
+        return !$reason instanceof AuthenticationException;
     }
 
     private function markRuntimeLive(): void

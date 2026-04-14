@@ -66,6 +66,12 @@ final class BgapiJobTracker
         }
     }
 
+    public function retainPendingAcrossReconnect(): void
+    {
+        // Intentionally empty: unexpected disconnects do not terminalize bgapi jobs.
+        // Pending jobs remain correlated by Job-UUID until completion or timeout.
+    }
+
     public function pendingCount(): int
     {
         return count($this->jobs);

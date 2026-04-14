@@ -4,7 +4,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
-Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, close-based `disconnect()`, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, and health snapshots. Replay hooks, backpressure-policy expansion, and broader heartbeat orchestration remain provisional.
+Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, close-based `disconnect()`, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, and health snapshots. Replay hooks, backpressure-policy expansion, and broader heartbeat orchestration remain provisional.
 
 ---
 
@@ -40,13 +40,16 @@ Current contract notes for the implemented slice:
 - Inflight `api()` calls reject with `ConnectionLostException` if the socket closes before their reply arrives.
 - `api()` and subscription/filter mutations are rejected while the runtime is recovering after an unexpected disconnect.
 - `disconnect()` is terminal for the runtime instance; it does not trigger reconnect.
+- `bgapi()` is illegal before successful authentication and during recovery.
+- `bgapi()` returns a handle immediately; `BgapiJobHandle::jobUuid()` becomes non-empty only after FreeSWITCH acknowledges the bgapi command.
+- Pending bgapi jobs survive unexpected supervised reconnect but are rejected on explicit shutdown.
 
 | Method | Return type | Description |
 |---|---|---|
 | `connect()` | `PromiseInterface<void>` | Establish connection and authenticate; repeated calls share the active connect promise until it settles |
 | `disconnect()` | `PromiseInterface<void>` | Close the active socket and resolve when close is observed; full drain semantics remain provisional |
 | `api(string $command)` | `PromiseInterface<ApiReply>` | Dispatch a serial api command |
-| `bgapi(string $command, string $args)` | `BgapiJobHandle` | Dispatch a bgapi command, returns handle immediately |
+| `bgapi(string $command, string $args)` | `BgapiJobHandle` | Dispatch a bgapi command, return a tracked handle immediately |
 | `events()` | `EventStreamInterface` | Access the event stream |
 | `subscriptions()` | `SubscriptionManagerInterface` | Access subscription management |
 | `health()` | `HealthReporterInterface` | Access runtime health |
@@ -113,6 +116,7 @@ Current health notes:
 - `snapshot()->connectionState` transitions through `Reconnecting` during unexpected disconnect recovery.
 - `snapshot()->reconnectAttempts` reflects retry attempts since the last successful authenticated connection and resets to zero after recovery succeeds.
 - `snapshot()->isLive` is driven by the currently implemented minimal heartbeat monitor. A false value may mean either a degraded but still-authenticated connection or a disconnected/recovering runtime.
+- `snapshot()->pendingBgapiJobCount` includes jobs that are still pending across an unexpected reconnect.
 
 ---
 
@@ -251,8 +255,11 @@ Apntalk\EslReact\Bgapi\BgapiJobHandle
 
 | Method | Return type | Description |
 |---|---|---|
-| `jobUuid()` | `string` | The Job-UUID assigned by FreeSWITCH |
-| `promise()` | `PromiseInterface<BackgroundJobEvent>` | Resolves on completion |
+| `jobUuid()` | `string` | The FreeSWITCH Job-UUID after ack; empty string before acceptance is observed |
+| `eslCommand()` | `string` | The bgapi command verb |
+| `eslArgs()` | `string` | The bgapi command arguments |
+| `dispatchedAtMicros()` | `float` | Local dispatch timestamp |
+| `promise()` | `PromiseInterface<BackgroundJobEvent>` | Resolves on matching completion; rejects on ack timeout, orphan timeout, or terminal shutdown |
 
 ---
 

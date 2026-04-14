@@ -35,7 +35,11 @@ interface AsyncEslClientInterface {
      * Dispatch an asynchronous background API command.
      *
      * Returns a BgapiJobHandle immediately (synchronous).
-     * The handle's promise() resolves with BackgroundJobEvent when the job completes.
+     * The handle's jobUuid() is empty until the bgapi acceptance reply arrives.
+     * The handle's promise() resolves with BackgroundJobEvent when the matching
+     * completion event arrives.
+     * The handle's promise rejects on ack timeout, completion timeout, or
+     * terminal disconnect.
      * Throws BackpressureException synchronously if the inflight limit is exceeded.
      * Throws DrainException synchronously if the runtime is draining.
      *
@@ -62,9 +66,9 @@ interface AsyncEslClientInterface {
     /**
      * Gracefully disconnect.
      *
-     * Enters drain mode: no new commands accepted.
-     * Waits for inflight commands to complete or timeout.
-     * Then sends EXIT and closes the socket.
+     * Enters drain mode, sends EXIT, and resolves when socket close is observed.
+     * Explicit disconnect is terminal for this runtime instance and does not
+     * trigger reconnect. Pending bgapi jobs are rejected on this path.
      *
      * @return PromiseInterface<void>
      */

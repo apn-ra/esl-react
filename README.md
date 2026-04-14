@@ -7,7 +7,7 @@ This package turns `apntalk/esl-core` into a usable long-lived async runtime: it
 Current implementation status:
 
 - Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, health snapshots, and deterministic fake-server integration tests.
-- Present but still provisional relative to the plan: `bgapi()` completion flow, advanced heartbeat orchestration beyond the current minimal liveness probe, explicit backpressure policy hardening, replay hooks, and drain redesign.
+- Present but still provisional relative to the plan: advanced heartbeat orchestration beyond the current minimal liveness probe, explicit backpressure policy hardening, replay hooks, and drain redesign.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`.
@@ -125,7 +125,7 @@ $client->api('status')->then(
 
 ### bgapi command
 
-`bgapi` commands return a `BgapiJobHandle` immediately. The job's promise resolves when the `BACKGROUND_JOB` completion event arrives.
+`bgapi` commands return a `BgapiJobHandle` immediately. The handle becomes correlated once FreeSWITCH acknowledges the command with a `Job-UUID`, and the handle's promise resolves only when the matching `BACKGROUND_JOB` completion event arrives.
 
 ```php
 $handle = $client->bgapi('originate', 'sofia/internal/1000 &echo');
@@ -142,7 +142,14 @@ $handle->promise()->then(
 
 Timeout behavior and reconnect behavior for pending bgapi jobs are documented in [docs/bgapi-tracking.md](docs/bgapi-tracking.md).
 
-`bgapi()` remains provisional in this repository pass and is not yet covered by the fake-server integration suite.
+Implemented bgapi contract in the current slice:
+
+- `bgapi()` fails closed before authentication and during reconnect recovery.
+- The handle is returned synchronously; `jobUuid()` is empty until the bgapi acceptance reply arrives.
+- Ack timeout and completion timeout are distinct: missing ack and missing completion reject the handle through different stages of the same promise lifecycle.
+- Late completion after timeout is ignored deterministically.
+- Pending bgapi jobs survive unexpected supervised reconnect and can still resolve on a later matching completion.
+- Explicit `disconnect()` is terminal for pending bgapi jobs and rejects them instead of waiting for later completion.
 
 ---
 

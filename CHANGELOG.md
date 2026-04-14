@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Desired subscription/filter restoration after successful reconnect re-authentication
 - Minimal heartbeat/liveness wiring into health snapshots and disconnect recovery
 - Fake-server reconnect/heartbeat integration coverage for restore order, bounded retry, and health transitions
+- Deterministic bgapi integration coverage for ack, completion correlation, orphan timeout, and reconnect-era pending-job behavior
 
 ### Changed
 - `AsyncEslClientInterface` now explicitly declares `connect()`, matching the documented public contract
@@ -27,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Unexpected disconnect now transitions through reconnect/recovery states, while explicit `disconnect()` remains terminal for the runtime instance
 - Recovery now re-authenticates first, restores the desired event baseline, restores filters, and only then returns to the live state
 - `api()` and subscription/filter mutations now fail closed while reconnect recovery is in progress
+- `bgapi()` now returns a real tracked handle whose Job-UUID appears after ack, resolves only on matching `BACKGROUND_JOB`, survives unexpected supervised reconnect, and rejects on explicit shutdown or orphan timeout
 
 ### Documentation
 - README, public API reference, and runtime lifecycle docs now distinguish implemented lifecycle guarantees from later planned runtime behavior
