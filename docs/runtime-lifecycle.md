@@ -1,6 +1,6 @@
 # Runtime lifecycle
 
-Status note: the connect/auth state transitions, unexpected-disconnect reconnect flow, and desired subscription/filter restoration documented here are implemented in this pass. Full drain completion, replay hooks, and broader heartbeat orchestration are still planned.
+Status note: the connect/auth state transitions, unexpected-disconnect reconnect flow, desired subscription/filter restoration, bounded drain completion, and observational replay-hook emission documented here are implemented in this pass. Heartbeat remains intentionally minimal, but its degrade/probe/dead behavior is now explicit and regression-tested.
 
 Hardening note for the implemented slice:
 
@@ -9,6 +9,7 @@ Hardening note for the implemented slice:
 - Unexpected or malformed inbound frames during the handshake fail closed and reject `connect()`.
 - After authentication succeeds, inbound event frames are delivered immediately on the live socket.
 - After an unexpected disconnect and successful re-authentication, the runtime restores the in-memory desired subscription baseline first and then restores filters before transitioning back to `Authenticated`/`Active`.
+- Replay capture, when enabled, survives an unexpected reconnect for later runtime traffic because it stays attached to the surviving runtime instance. It does not persist lost traffic or provide process-restart recovery.
 
 ## State machines
 
@@ -28,7 +29,7 @@ The runtime maintains two parallel state machines: `ConnectionState` and `Sessio
 | `Authenticating` | The ESL auth challenge has been received and credentials are being sent. |
 | `Authenticated` | Authentication succeeded. The runtime is ready to send commands and receive events. |
 | `Reconnecting` | The connection was lost and the supervisor is executing a retry attempt. |
-| `Draining` | The runtime has been asked to shut down. New commands are rejected. The runtime is waiting for inflight operations to complete. |
+| `Draining` | The runtime has been asked to shut down. New work is rejected immediately while accepted inflight work gets a bounded settle window. |
 | `Closed` | The runtime has been explicitly shut down. No further reconnects will occur for this runtime instance. |
 
 ### ConnectionState transitions
@@ -59,7 +60,7 @@ Reconnecting
   -> Disconnected          on maxAttempts exhausted
 
 Draining
-  -> Closed                on all inflight commands resolved and disconnect complete
+  -> Closed                on inflight work settling or being terminated at the drain deadline
 
 Closed
   (terminal — no transitions out)
@@ -114,20 +115,50 @@ Each reconnect cycle creates a new session. The `SessionState` of the prior sess
 | Retry attempt fired | `Reconnecting` → `Connecting` | — |
 | Max retries exhausted | `Reconnecting` → `Disconnected` | — |
 | `disconnect()` called | `Authenticated` → `Draining` | — |
-| Drain complete | `Draining` → `Closed` | `Active` → `Disconnected` |
+| Drain settle or deadline | `Draining` → `Closed` | `Active` → `Disconnected` |
 
 ---
 
-## What happens on disconnect
+## What happens on unexpected disconnect
 
-In the currently implemented slice, when a connection drops (socket close, network error, unexpected EOF, or user-triggered close with inflight work):
+In the currently implemented slice, when the transport drops unexpectedly (socket close, network error, unexpected EOF):
 
 1. `ConnectionState` transitions to `Reconnecting` (if retry is configured) or `Disconnected`.
 2. `SessionState` transitions to `Disconnected`.
 3. All pending `api` commands that have been sent but have not received a reply are rejected with `ConnectionLostException`.
 4. Commands that are enqueued but not yet sent are also rejected with `ConnectionLostException`.
-5. Pending `bgapi` jobs that have already been accepted remain tracked across unexpected supervised reconnect. They are rejected only on explicit shutdown or when their orphan timeout expires.
+5. Pending `bgapi` jobs that have already been accepted remain tracked across unexpected supervised reconnect. They are rejected only on explicit shutdown, drain deadline expiry, or when their orphan timeout expires.
 6. Desired subscriptions and filters remain tracked in memory and are restored after re-authentication in this order: event baseline first, then filters.
+
+## What happens on heartbeat degradation
+
+In the current bounded heartbeat model:
+
+1. Inbound activity keeps the runtime live.
+2. After one consecutive missed liveness check, `isLive` becomes `false` while `ConnectionState` may still remain `Authenticated`.
+3. At that first missed check, the runtime may issue one lightweight `api status` probe if it is authenticated, not draining, and has no command already inflight.
+4. If activity resumes before the next missed check, the runtime returns to `Live`.
+5. If a second consecutive missed liveness check occurs without recovery, the runtime closes the socket and enters the normal disconnect/reconnect path.
+
+Drain remains terminal and does not use heartbeat recovery.
+
+## What happens on drain
+
+When `disconnect()` is called on a live runtime:
+
+1. `ConnectionState` transitions to `Draining`.
+2. New `api()`, `bgapi()`, and subscription/filter mutations reject immediately.
+3. Already-accepted inflight `api()` and `bgapi()` work may continue until `BackpressureConfig::$drainTimeoutSeconds`.
+4. If inflight work settles before the deadline, the runtime sends `exit` and closes terminally.
+5. If inflight work remains at the deadline, the runtime rejects that remaining work with `DrainException`, then closes terminally.
+
+Explicit drain is different from unexpected transport loss:
+
+- new work rejects immediately with `DrainException`
+- remaining inflight `api()` work is allowed to settle until the deadline, then rejects with `DrainException` if still unresolved
+- remaining pending `bgapi()` work is allowed to settle until the deadline, then rejects with `DrainException` if still unresolved
+
+Drain is an explicit shutdown path and does not trigger reconnect.
 
 ---
 

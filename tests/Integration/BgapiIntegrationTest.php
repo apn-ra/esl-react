@@ -12,7 +12,7 @@ use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
-use Apntalk\EslReact\Exceptions\ConnectionLostException;
+use Apntalk\EslReact\Exceptions\DrainException;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
 
@@ -259,8 +259,8 @@ final class BgapiIntegrationTest extends AsyncTestCase
         try {
             $this->await($handle->promise(), 0.2);
             self::fail('Expected pending bgapi job to reject on explicit disconnect');
-        } catch (ConnectionLostException $e) {
-            self::assertNotSame('', $e->getMessage());
+        } catch (DrainException $e) {
+            self::assertStringContainsString('Drain deadline expired', $e->getMessage());
         }
 
         self::assertSame(ConnectionState::Closed, $client->health()->snapshot()->connectionState);

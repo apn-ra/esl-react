@@ -19,6 +19,10 @@ final class RuntimeHealthReporter implements HealthReporterInterface
 
     private \Closure $bgapiPendingCountProvider;
 
+    private \Closure $totalInflightCountProvider;
+
+    private \Closure $overloadedProvider;
+
     private \Closure $subscriptionsProvider;
 
     private \Closure $reconnectAttemptsProvider;
@@ -36,6 +40,8 @@ final class RuntimeHealthReporter implements HealthReporterInterface
         \Closure $livenessProvider,
         \Closure $inflightCountProvider,
         \Closure $bgapiPendingCountProvider,
+        \Closure $totalInflightCountProvider,
+        \Closure $overloadedProvider,
         \Closure $subscriptionsProvider,
         \Closure $reconnectAttemptsProvider,
         \Closure $drainingProvider,
@@ -46,6 +52,8 @@ final class RuntimeHealthReporter implements HealthReporterInterface
         $this->livenessProvider = $livenessProvider;
         $this->inflightCountProvider = $inflightCountProvider;
         $this->bgapiPendingCountProvider = $bgapiPendingCountProvider;
+        $this->totalInflightCountProvider = $totalInflightCountProvider;
+        $this->overloadedProvider = $overloadedProvider;
         $this->subscriptionsProvider = $subscriptionsProvider;
         $this->reconnectAttemptsProvider = $reconnectAttemptsProvider;
         $this->drainingProvider = $drainingProvider;
@@ -66,6 +74,8 @@ final class RuntimeHealthReporter implements HealthReporterInterface
             isLive: ($this->livenessProvider)() === LivenessState::Live,
             inflightCommandCount: ($this->inflightCountProvider)(),
             pendingBgapiJobCount: ($this->bgapiPendingCountProvider)(),
+            totalInflightCount: ($this->totalInflightCountProvider)(),
+            isOverloaded: ($this->overloadedProvider)(),
             activeSubscriptions: ($this->subscriptionsProvider)(),
             reconnectAttempts: ($this->reconnectAttemptsProvider)(),
             isDraining: ($this->drainingProvider)(),

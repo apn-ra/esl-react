@@ -1,105 +1,177 @@
 # Replay hooks
 
-> **Provisional.** This feature is marked `@provisional` and is subject to change before 1.0. The interface described here reflects the current design intent but may be revised.
+Replay hooks are implemented and test-covered for the currently supported runtime paths.
 
----
+The artifact contract in this document is the supported replay-hook contract for `apntalk/esl-react` within the current package line. Future additions should be additive rather than renaming the artifact vocabulary below.
 
 ## Purpose
 
-`esl-react` can emit replay-safe capture hooks during a live runtime session. These hooks capture the inbound and outbound messages exchanged with FreeSWITCH, enriched with connection and session metadata, and deliver them to a consumer-supplied sink.
+`apntalk/esl-react` can emit replay-safe runtime artifacts during live operation.
 
-This is a **hook emission layer only**. `esl-react` does not store data, does not serialize to disk, does not manage replay playback, and does not own any persistence mechanism. Storage and playback are the responsibility of the consuming layer (e.g., `laravel-freeswitch-esl`).
+This is an **observational hook layer only**:
 
----
+- no durable storage
+- no replay execution
+- no process-restart recovery
+- no command queueing
+- no control-plane ownership over runtime behavior
 
-## Enabling replay capture
+The runtime continues to own socket lifecycle, command flow, reconnect, and drain semantics. Replay capture only observes those paths.
 
-Replay capture is disabled by default. Enable it in `RuntimeConfig`:
+## Enabling capture
+
+Replay capture is disabled by default.
+
+Enable it through `RuntimeConfig` with one or more `ReplayCaptureSinkInterface` sinks:
 
 ```php
-$config = new \Apntalk\EslReact\Config\RuntimeConfig(
-    // ...
+use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
+use Apntalk\EslReact\Config\RuntimeConfig;
+
+$config = RuntimeConfig::create(
+    host: '127.0.0.1',
+    port: 8021,
+    password: 'ClueCon',
     replayCaptureEnabled: true,
-    replayCaptureSink: new MyReplayCaptureSinkImplementation(),
+    replayCaptureSinks: [
+        new class () implements ReplayCaptureSinkInterface {
+            public function capture(\Apntalk\EslCore\Contracts\ReplayEnvelopeInterface $envelope): void
+            {
+                // lightweight sink logic only
+            }
+        },
+    ],
 );
 ```
 
-When `replayCaptureEnabled` is `false`, no capture hooks fire and there is no performance overhead.
+Current configuration rules:
 
----
+- `replayCaptureEnabled: false` means no hooks fire, even if sinks are configured.
+- `replayCaptureEnabled: true` requires at least one sink.
+- Enabling capture does not imply persistence, buffering, or deferred replay behavior.
 
-## ReplayEnvelope
+## Artifact shape
 
-Captured artifacts are emitted as `ReplayEnvelope` objects, defined in `apntalk/esl-core`. Each `ReplayEnvelope` contains:
+Artifacts are emitted as `ReplayEnvelopeInterface` values from `apntalk/esl-core`.
 
-- The raw `EventEnvelope` or serialized command/reply payload
-- Connection metadata (host, port, connection ID)
-- Session metadata (session ID, auth timestamp)
-- A capture timestamp (microseconds)
-- A capture path identifier (command reply, event, bgapi completion)
+For reply and event traffic, `esl-react` uses the existing `ReplayEnvelopeFactory` substrate and adds runtime metadata needed to identify the capture point.
 
-The `ReplayEnvelope` type is owned by `esl-core` and is the canonical capture artifact format. `esl-react` constructs envelopes via `ReplayEnvelopeFactory` and emits them; it does not define the format.
+For dispatch-intent artifacts, `esl-react` emits replay envelopes directly using the same stable envelope shape because there is no protocol reply/event object yet at that point.
 
----
+### Required stable fields
 
-## Capture paths
+Every emitted artifact contains:
 
-There are three capture paths:
+- the standard `ReplayEnvelopeInterface` fields from `apntalk/esl-core`
+- `replay-artifact-version`
+- `replay-artifact-name`
+- `runtime-capture-path`
+- runtime connection/session/liveness metadata
+- runtime connection generation
+- runtime reconnect attempt count
+- runtime draining/overloaded flags
 
-### Command reply path
+Current version:
 
-Fires when an `api` command reply is received and correlated to a pending command. The capture includes the outbound command and the inbound reply.
+- `replay-artifact-version = 1`
 
-### Event path
+### Optional fields
 
-Fires for every inbound event envelope, after routing and before typed dispatch. The capture includes the raw envelope with full headers.
+Depending on the capture point, artifacts may also contain:
 
-### BGAPI completion path
+- command name / command args
+- mutation kind
+- desired-state before / after snapshots
+- filter header name / header value
+- `Job-UUID`
+- protocol sequence
+- event-specific protocol facts preserved by `esl-core`
 
-Fires when a `BACKGROUND_JOB` completion event is matched to a pending bgapi job. The capture includes the completion event envelope and the original job UUID.
+## Implemented capture points
 
----
+The current runtime emits capture artifacts for:
 
-## ReplayCaptureSinkInterface
+1. `api()` dispatch intent after the runtime accepts the call: `api.dispatch`
+2. `bgapi()` dispatch intent after the runtime accepts the call: `bgapi.dispatch`
+3. `api()` reply receipt: `api.reply`
+4. other command replies received on the live runtime path: `command.reply`
+5. inbound event receipt on the live event path: `event.raw`
+6. bgapi ack after the `Job-UUID` is assigned: `bgapi.ack`
+7. bgapi completion after a matching `BACKGROUND_JOB`: `bgapi.complete`
+8. accepted subscription mutation commands: `subscription.mutate`
+9. accepted filter mutation commands: `filter.mutate`
 
-Consumers implement this interface to receive capture artifacts:
+Important distinctions:
 
-```php
-interface ReplayCaptureSinkInterface
-{
-    public function capture(\Apntalk\EslCore\Model\Replay\ReplayEnvelope $envelope): void;
-}
-```
+- A `BACKGROUND_JOB` event can produce two artifacts:
+  - the generic inbound event artifact (`replay-artifact-name = event.raw`)
+  - the matched bgapi completion artifact (`replay-artifact-name = bgapi.complete`)
+- A bgapi ack can also produce two artifacts:
+  - the generic command reply artifact (`replay-artifact-name = command.reply`)
+  - the bgapi-ack artifact (`replay-artifact-name = bgapi.ack`)
+- Rejected operations do not emit dispatch artifacts. If overload, drain, recovery-state gating, or unauthenticated-state gating rejects a call, no replay capture is produced for that rejected attempt.
+- Deterministic no-op subscription/filter mutations also emit nothing, because no live-session mutation command is sent.
 
-The `capture()` method is called synchronously within the event loop for each artifact. Implementations must not block the loop. Heavy I/O (disk writes, network calls) should be offloaded using `Loop::futureTick()` or a queue.
+For compatibility, `runtime-capture-path` currently matches `replay-artifact-name`.
 
-If `capture()` throws an exception, the exception is caught by the runtime and passed to the `listenerErrorHandler`. It does not crash the runtime or interrupt event delivery.
+## Metadata currently included
 
----
+Each artifact includes as much metadata as is truly available at the capture point.
 
-## Behavior under backpressure
+Currently emitted metadata includes:
 
-When the runtime is under backpressure or in drain mode, replay capture continues to fire for events that are still being processed. Replay capture does not itself apply backpressure, and the sink is responsible for handling high-throughput scenarios. If the sink cannot keep up, it should buffer or drop internally according to its own policy.
+- capture timestamp and capture sequence from the replay envelope
+- runtime session ID
+- `runtime-capture-path`
+- `replay-artifact-version`
+- `replay-artifact-name`
+- runtime connection state
+- runtime session state
+- runtime liveness state
+- runtime reconnect-attempt count
+- runtime connection generation within the live runtime instance
+- runtime draining / overloaded flags
+- command type / command name / command args when captured on a dispatch or bgapi-specific path
+- `Job-UUID` when available
+- protocol facts already preserved by `esl-core` for replies and events
 
----
+The exact metadata set depends on the capture point. For example:
 
-## What replay hooks are NOT
+- dispatch intent has command metadata but no protocol sequence
+- generic reply capture has reply protocol facts
+- inbound event capture has event name and protocol sequence
+- bgapi completion includes both event facts and the matched job UUID
+- subscription/filter mutation artifacts include a JSON payload describing the accepted intent and desired-state transition
 
-- Not a durable replay engine: `esl-react` has no storage
-- Not a playback mechanism: `esl-react` cannot replay captured artifacts
-- Not a recording mode: capture hooks are fire-and-forget from the runtime's perspective
-- Not a debugging proxy: `esl-react` does not intercept or modify traffic for capture purposes
+## Failure containment
 
-If you need durable replay, implement a `ReplayCaptureSinkInterface` that writes to a database or message queue. If you need playback, that belongs in `laravel-freeswitch-esl` or application code, using `FakeEslServer` or a purpose-built replay harness.
+Replay sinks run synchronously on the event loop.
 
----
+Current policy:
 
-## Provisional status
+- sink failures are caught and contained inside replay capture
+- the live runtime continues processing replies, events, reconnect, and drain transitions
+- one failing sink does not stop later sinks from receiving the same artifact
+- the current implementation writes a short stderr message for sink exceptions
 
-The replay hook API is marked `@provisional` because:
+No stable public replay-error callback is exposed in this phase.
 
-- The `ReplayEnvelope` format in `esl-core` may evolve before 1.0.
-- The `ReplayCaptureSinkInterface` signature may be adjusted.
-- The capture paths may be expanded to include subscription commands and filter commands.
+## Interaction with reconnect, overload, and drain
 
-Consumers building production systems on replay hooks should treat this feature as experimental until the 1.0 stability guarantee applies.
+Current tested behavior:
+
+- replay capture continues to observe later runtime traffic after an unexpected supervised reconnect
+- reconnect does not reconstruct traffic that was already lost before capture
+- overload and drain rejections still fail closed; replay hooks do not bypass those gates
+- accepted inflight work can still produce reply/event/completion capture during drain until it settles or is terminated
+- explicit drain shutdown remains terminal for the runtime instance and does not reconnect
+
+## What replay hooks are not
+
+- not a persistence adapter
+- not a replay engine
+- not a playback API
+- not a job/workflow orchestrator
+- not a replacement for the runtime’s health or reconnect policy
+
+If you need durable recording or replay execution, implement that in an upper-layer package using the emitted envelopes.

@@ -8,6 +8,8 @@ use React\EventLoop\TimerInterface;
 
 final class HeartbeatMonitor
 {
+    private const MAX_CONSECUTIVE_MISSES = 2;
+
     private LivenessState $state = LivenessState::Live;
     private ?TimerInterface $timer = null;
     private ?float $lastHeartbeatAtMicros = null;
@@ -50,6 +52,8 @@ final class HeartbeatMonitor
             $this->loop->cancelTimer($this->timer);
             $this->timer = null;
         }
+
+        $this->missedCount = 0;
     }
 
     public function recordActivity(): void
@@ -89,13 +93,13 @@ final class HeartbeatMonitor
     {
         if ($this->idleTimer->elapsedSeconds() > $this->config->timeoutSeconds) {
             $this->missedCount++;
-            if ($this->missedCount >= 2) {
+            if ($this->missedCount >= self::MAX_CONSECUTIVE_MISSES) {
                 $this->transition(LivenessState::Dead);
             } else {
                 $this->transition(LivenessState::Degraded);
-            }
-            if ($this->probeCallback !== null) {
-                ($this->probeCallback)();
+                if ($this->probeCallback !== null) {
+                    ($this->probeCallback)();
+                }
             }
         } else {
             if ($this->state !== LivenessState::Live) {

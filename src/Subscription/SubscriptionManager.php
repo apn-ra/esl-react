@@ -8,6 +8,7 @@ use Apntalk\EslCore\Commands\NoEventsCommand;
 use Apntalk\EslCore\Contracts\CommandInterface;
 use Apntalk\EslReact\Contracts\SubscriptionManagerInterface;
 use Apntalk\EslReact\Exceptions\ConnectionException;
+use Apntalk\EslReact\Replay\RuntimeReplayCapture;
 use React\Promise\PromiseInterface;
 use function React\Promise\resolve;
 
@@ -21,8 +22,9 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         private readonly FilterManager $filters,
         private readonly \Closure $dispatchCommand,
         private readonly float $timeoutSeconds,
-        /** @var \Closure(): bool */
-        private readonly \Closure $canMutateLiveSession,
+        /** @var \Closure(): void */
+        private readonly \Closure $assertCanMutateLiveSession,
+        private readonly ?RuntimeReplayCapture $replayCapture = null,
     ) {}
 
     public function subscribe(string ...$eventNames): PromiseInterface
@@ -49,6 +51,19 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             return $this->resolvedVoid();
         }
 
+        $before = $this->subscriptionState();
+        $after = [
+            'subscribe_all' => false,
+            'event_names' => $desired,
+        ];
+        $this->replayCapture?->captureSubscriptionMutation([
+            'mutation_kind' => 'subscribe',
+            'input' => ['event_names' => $normalized],
+            'desired_state_before' => $before,
+            'desired_state_after' => $after,
+            'noop' => false,
+        ]);
+
         return ($this->dispatchCommand)(
             EventSubscriptionCommand::forNames($desired),
             'event plain ' . implode(' ', $desired),
@@ -65,6 +80,19 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         if ($this->activeSubscriptions->isSubscribedAll()) {
             return $this->resolvedVoid();
         }
+
+        $before = $this->subscriptionState();
+        $after = [
+            'subscribe_all' => true,
+            'event_names' => [],
+        ];
+        $this->replayCapture?->captureSubscriptionMutation([
+            'mutation_kind' => 'subscribe_all',
+            'input' => ['event_names' => ['all']],
+            'desired_state_before' => $before,
+            'desired_state_after' => $after,
+            'noop' => false,
+        ]);
 
         return ($this->dispatchCommand)(
             EventSubscriptionCommand::all(),
@@ -106,6 +134,19 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             ? 'noevents'
             : 'event plain ' . implode(' ', $desired);
 
+        $before = $this->subscriptionState();
+        $after = [
+            'subscribe_all' => false,
+            'event_names' => $desired,
+        ];
+        $this->replayCapture?->captureSubscriptionMutation([
+            'mutation_kind' => 'unsubscribe',
+            'input' => ['event_names' => $normalized],
+            'desired_state_before' => $before,
+            'desired_state_after' => $after,
+            'noop' => false,
+        ]);
+
         return ($this->dispatchCommand)(
             $command,
             $description,
@@ -128,6 +169,17 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             return $this->resolvedVoid();
         }
 
+        $before = $this->filterState();
+        $after = [...$before, ['headerName' => $headerName, 'headerValue' => $headerValue]];
+        $this->replayCapture?->captureFilterMutation([
+            'mutation_kind' => 'add',
+            'header_name' => $headerName,
+            'header_value' => $headerValue,
+            'desired_state_before' => $before,
+            'desired_state_after' => $after,
+            'noop' => false,
+        ]);
+
         return ($this->dispatchCommand)(
             FilterCommand::add($headerName, $headerValue),
             sprintf('filter %s %s', $headerName, $headerValue),
@@ -144,6 +196,23 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         if (!$this->filters->hasFilter($headerName, $headerValue)) {
             return $this->resolvedVoid();
         }
+
+        $before = $this->filterState();
+        $after = array_values(array_filter(
+            $before,
+            static fn (array $filter): bool => !(
+                $filter['headerName'] === $headerName
+                && $filter['headerValue'] === $headerValue
+            ),
+        ));
+        $this->replayCapture?->captureFilterMutation([
+            'mutation_kind' => 'remove',
+            'header_name' => $headerName,
+            'header_value' => $headerValue,
+            'desired_state_before' => $before,
+            'desired_state_after' => $after,
+            'noop' => false,
+        ]);
 
         return ($this->dispatchCommand)(
             FilterCommand::delete($headerName, $headerValue),
@@ -243,8 +312,25 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
     private function assertCanMutateLiveSession(): void
     {
-        if (!(($this->canMutateLiveSession)())) {
-            throw new ConnectionException('Runtime is not authenticated');
-        }
+        ($this->assertCanMutateLiveSession)();
+    }
+
+    /**
+     * @return array{subscribe_all: bool, event_names: list<string>}
+     */
+    private function subscriptionState(): array
+    {
+        return [
+            'subscribe_all' => $this->activeSubscriptions->isSubscribedAll(),
+            'event_names' => $this->activeSubscriptions->eventNames(),
+        ];
+    }
+
+    /**
+     * @return list<array{headerName: string, headerValue: string}>
+     */
+    private function filterState(): array
+    {
+        return $this->filters->all();
     }
 }

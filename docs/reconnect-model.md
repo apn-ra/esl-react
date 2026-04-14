@@ -81,7 +81,7 @@ These cases fail closed, transition the runtime to `Disconnected`, and reject th
 
 ## Inflight commands on disconnect
 
-When the connection drops while commands are inflight:
+When the transport drops unexpectedly while commands are inflight:
 
 - All pending `api` commands (sent and awaiting reply, or enqueued but not yet sent) are rejected with `ConnectionLostException` immediately.
 - Their promises reject synchronously as part of the disconnect handling, before the reconnect cycle begins.
@@ -98,7 +98,7 @@ Accepted bgapi jobs remain tracked across unexpected supervised reconnect.
 - Reconnect itself does not resolve them.
 - A later `BACKGROUND_JOB` event with the same `Job-UUID` can still resolve them after reconnect.
 - If no matching completion arrives before `bgapiOrphanTimeoutSeconds`, they reject with `CommandTimeoutException`.
-- Explicit `disconnect()` is terminal and rejects pending bgapi jobs instead of keeping them open.
+- Explicit `disconnect()` is terminal and rejects pending bgapi jobs with `DrainException` instead of keeping them open.
 
 ---
 

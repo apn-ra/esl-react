@@ -15,16 +15,25 @@ final class PendingBgapiJob
      * @param Deferred<\Apntalk\EslCore\Events\BackgroundJobEvent> $deferred
      */
     public function __construct(
-        private readonly string $jobUuid,
+        private ?string $jobUuid,
         private readonly string $eslCommand,
         private readonly string $eslArgs,
         private readonly Deferred $deferred,
         private readonly float $dispatchedAtMicros,
     ) {}
 
-    public function jobUuid(): string
+    public function jobUuid(): ?string
     {
         return $this->jobUuid;
+    }
+
+    public function assignJobUuid(string $jobUuid): void
+    {
+        if ($jobUuid === '') {
+            throw new \InvalidArgumentException('jobUuid must not be empty');
+        }
+
+        $this->jobUuid = $jobUuid;
     }
 
     public function eslCommand(): string

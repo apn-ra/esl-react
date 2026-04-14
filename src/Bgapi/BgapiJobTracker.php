@@ -23,6 +23,9 @@ final class BgapiJobTracker
     public function register(PendingBgapiJob $job): void
     {
         $uuid = $job->jobUuid();
+        if ($uuid === null) {
+            throw new \LogicException('Cannot register bgapi job without a Job-UUID');
+        }
         $this->jobs[$uuid] = $job;
 
         $timer = $this->loop->addTimer(
@@ -35,17 +38,17 @@ final class BgapiJobTracker
         $job->attachTimer($timer);
     }
 
-    public function complete(BackgroundJobEvent $event): bool
+    public function complete(BackgroundJobEvent $event): ?PendingBgapiJob
     {
         $uuid = $event->jobUuid();
         if ($uuid === null || !isset($this->jobs[$uuid])) {
-            return false;
+            return null;
         }
         $job = $this->jobs[$uuid];
         $this->cancelTimer($uuid);
         unset($this->jobs[$uuid]);
         $job->resolve($event);
-        return true;
+        return $job;
     }
 
     public function abandon(string $jobUuid, \Throwable $reason): void

@@ -20,15 +20,18 @@ use Apntalk\EslReact\Contracts\HealthReporterInterface;
 use Apntalk\EslReact\Contracts\SubscriptionManagerInterface;
 use Apntalk\EslReact\Events\EventStream;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
+use Apntalk\EslReact\Exceptions\BackpressureException;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Exceptions\ConnectionLostException;
+use Apntalk\EslReact\Exceptions\DrainException;
 use Apntalk\EslReact\Health\RuntimeHealthReporter;
 use Apntalk\EslReact\Heartbeat\HeartbeatMonitor;
 use Apntalk\EslReact\Heartbeat\LivenessState;
 use Apntalk\EslReact\Protocol\EnvelopePump;
 use Apntalk\EslReact\Protocol\InboundMessageRouter;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
+use Apntalk\EslReact\Replay\RuntimeReplayCapture;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
 use Apntalk\EslReact\Supervisor\ReconnectScheduler;
@@ -53,11 +56,14 @@ final class RuntimeClient implements AsyncEslClientInterface
     private ?Deferred $disconnectDeferred = null;
     private ?RuntimeHealthReporter $health = null;
     private ?TimerInterface $connectTimeoutTimer = null;
+    private ?TimerInterface $drainDeadlineTimer = null;
+    private ?TimerInterface $drainPollTimer = null;
     private bool $draining = false;
     private bool $supervisionEnabled = false;
     private bool $suppressReconnectOnNextClose = false;
     private bool $reconnectScheduled = false;
     private ?\Throwable $pendingCloseReason = null;
+    private int $connectionGeneration = 0;
 
     public function __construct(
         private readonly RuntimeConfig $config,
@@ -73,6 +79,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         private readonly SubscriptionManager $subscriptions,
         private readonly ReconnectScheduler $reconnects,
         private readonly HeartbeatMonitor $heartbeat,
+        private readonly RuntimeReplayCapture $replay,
     ) {
         $this->wireProtocol();
         $this->wireHeartbeat();
@@ -104,6 +111,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         $this->draining = false;
+        $this->cancelDrainTimers();
         $this->supervisionEnabled = true;
         $this->suppressReconnectOnNextClose = false;
         $this->pendingCloseReason = null;
@@ -120,9 +128,13 @@ final class RuntimeClient implements AsyncEslClientInterface
 
     public function api(string $command, string $args = ''): PromiseInterface
     {
-        if (!$this->connectionState->canAcceptCommands()) {
-            return reject(new ConnectionException('Runtime is not authenticated'));
+        try {
+            $this->assertCanAcceptNewWork();
+        } catch (\Throwable $e) {
+            return reject($e);
         }
+
+        $this->replay->captureApiDispatch($command, $args);
 
         return $this->commands->dispatch(
             new ApiCommand($command, $args),
@@ -142,11 +154,19 @@ final class RuntimeClient implements AsyncEslClientInterface
 
     public function bgapi(string $command, string $args = ''): BgapiJobHandle
     {
-        if (!$this->connectionState->canAcceptCommands()) {
-            throw new ConnectionException('Runtime is not authenticated');
-        }
+        $this->assertCanAcceptNewWork();
 
-        return $this->bgapi->dispatch($command, $args);
+        $handle = $this->bgapi->dispatch($command, $args);
+        $handle->promise()->then(
+            function (): void {
+                $this->maybeFinalizeDrain();
+            },
+            function (): void {
+                $this->maybeFinalizeDrain();
+            },
+        );
+
+        return $handle;
     }
 
     public function events(): EventStreamInterface
@@ -182,6 +202,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->heartbeat->stop();
             $this->commands->enterDrainMode();
             $this->cancelConnectTimeout();
+            $this->cancelDrainTimers();
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
@@ -195,6 +216,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->reconnects->cancel();
             $this->reconnectScheduled = false;
             $this->heartbeat->stop();
+            $this->cancelDrainTimers();
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
@@ -209,16 +231,8 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->commands->enterDrainMode();
         $this->connectionState = ConnectionState::Draining;
         $this->disconnectDeferred = new Deferred();
-
-        try {
-            $this->outbound->dispatch(new ExitCommand());
-        } catch (\Throwable $e) {
-            $this->recordError($e);
-        }
-
-        $connection = $this->connection;
-        \assert($connection instanceof ConnectionInterface);
-        $connection->end();
+        $this->startDrainTimers();
+        $this->maybeFinalizeDrain();
 
         $disconnect = $this->disconnectDeferred;
         \assert($disconnect instanceof Deferred);
@@ -246,6 +260,22 @@ final class RuntimeClient implements AsyncEslClientInterface
         return $this->commands->totalPendingCount();
     }
 
+    public function pendingBgapiCount(): int
+    {
+        return $this->bgapi->pendingCount();
+    }
+
+    public function totalInflightWorkCount(): int
+    {
+        return $this->inflightCommandCount() + $this->pendingBgapiCount();
+    }
+
+    public function isOverloaded(): bool
+    {
+        return $this->config->backpressure->rejectOnOverload
+            && $this->totalInflightWorkCount() >= $this->config->backpressure->maxInflightCommands;
+    }
+
     public function isDraining(): bool
     {
         return $this->draining;
@@ -254,6 +284,16 @@ final class RuntimeClient implements AsyncEslClientInterface
     public function reconnectAttempts(): int
     {
         return $this->reconnects->attempts();
+    }
+
+    public function connectionGeneration(): int
+    {
+        return $this->connectionGeneration;
+    }
+
+    public function assertCanAcceptSessionMutation(): void
+    {
+        $this->assertCanAcceptNewWork();
     }
 
     private function wireProtocol(): void
@@ -269,6 +309,8 @@ final class RuntimeClient implements AsyncEslClientInterface
         });
 
         $this->router->onReply(function ($reply): void {
+            $this->replay->captureReply($reply);
+
             if ($this->sessionState === SessionState::Authenticating) {
                 if ($reply instanceof AuthAcceptedReply) {
                     $this->cancelConnectTimeout();
@@ -416,6 +458,7 @@ final class RuntimeClient implements AsyncEslClientInterface
     private function attachConnection(ConnectionInterface $connection): void
     {
         $this->connection = $connection;
+        $this->connectionGeneration++;
         $this->connectionState = ConnectionState::Connected;
         $this->sessionState = SessionState::NotStarted;
         $this->livenessState = LivenessState::Degraded;
@@ -435,6 +478,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $reason ??= $this->pendingCloseReason;
         $this->pendingCloseReason = null;
         $this->cancelConnectTimeout();
+        $this->cancelDrainTimers();
         $this->heartbeat->stop();
         $this->envelopePump->detach();
         $this->outbound->detach();
@@ -444,12 +488,13 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->sessionState = SessionState::Disconnected;
         }
         $this->livenessState = LivenessState::Dead;
-        $this->commands->onConnectionLost();
         $disconnectReason = $reason ?? new ConnectionLostException();
         if ($this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason)) {
+            $this->commands->onConnectionLost();
             $this->bgapiTracker->retainPendingAcrossReconnect();
         } else {
-            $this->bgapiTracker->abandonAll($disconnectReason);
+            $this->commands->abortAll($disconnectReason);
+            $this->bgapi->terminateAll($disconnectReason);
         }
 
         if ($this->connectDeferred !== null) {
@@ -466,6 +511,10 @@ final class RuntimeClient implements AsyncEslClientInterface
             $disconnect = $this->disconnectDeferred;
             $this->disconnectDeferred = null;
             $disconnect->resolve(null);
+        }
+
+        if ($this->connectionState === ConnectionState::Closed) {
+            $this->draining = false;
         }
 
         $this->suppressReconnectOnNextClose = false;
@@ -654,5 +703,94 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->heartbeat->recordActivity();
         $this->heartbeat->start();
         $this->livenessState = $this->heartbeat->state();
+    }
+
+    private function assertCanAcceptNewWork(): void
+    {
+        if ($this->draining) {
+            throw new DrainException();
+        }
+
+        if (!$this->connectionState->canAcceptCommands()) {
+            throw new ConnectionException('Runtime is not authenticated');
+        }
+
+        if ($this->isOverloaded()) {
+            throw new BackpressureException(sprintf(
+                'Runtime overloaded (%d inflight, limit %d)',
+                $this->totalInflightWorkCount(),
+                $this->config->backpressure->maxInflightCommands,
+            ));
+        }
+    }
+
+    private function startDrainTimers(): void
+    {
+        $this->cancelDrainTimers();
+        $this->drainPollTimer = $this->loop->addPeriodicTimer(0.01, function (): void {
+            $this->maybeFinalizeDrain();
+        });
+
+        $timeoutSeconds = $this->config->backpressure->drainTimeoutSeconds;
+        $this->drainDeadlineTimer = $this->loop->addTimer($timeoutSeconds, function () use ($timeoutSeconds): void {
+            if (!$this->draining) {
+                return;
+            }
+
+            $reason = new DrainException(sprintf(
+                'Drain deadline expired after %.2f seconds with %d inflight work items remaining',
+                $timeoutSeconds,
+                $this->totalInflightWorkCount(),
+            ));
+            $this->recordError($reason);
+            $this->commands->abortAll($reason);
+            $this->bgapi->terminateAll($reason);
+            $this->closeAfterDrain();
+        });
+    }
+
+    private function maybeFinalizeDrain(): void
+    {
+        if (!$this->draining || $this->connection === null) {
+            return;
+        }
+
+        if ($this->totalInflightWorkCount() > 0) {
+            return;
+        }
+
+        $this->closeAfterDrain();
+    }
+
+    private function closeAfterDrain(): void
+    {
+        if ($this->connection === null) {
+            return;
+        }
+
+        $this->cancelDrainTimers();
+
+        try {
+            $this->outbound->dispatch(new ExitCommand());
+        } catch (\Throwable $e) {
+            $this->recordError($e);
+        }
+
+        $connection = $this->connection;
+        \assert($connection instanceof ConnectionInterface);
+        $connection->end();
+    }
+
+    private function cancelDrainTimers(): void
+    {
+        if ($this->drainDeadlineTimer !== null) {
+            $this->loop->cancelTimer($this->drainDeadlineTimer);
+            $this->drainDeadlineTimer = null;
+        }
+
+        if ($this->drainPollTimer !== null) {
+            $this->loop->cancelTimer($this->drainPollTimer);
+            $this->drainPollTimer = null;
+        }
     }
 }

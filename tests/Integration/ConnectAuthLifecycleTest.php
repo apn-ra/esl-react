@@ -11,6 +11,7 @@ use Apntalk\EslReact\Exceptions\AuthenticationException;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Exceptions\ConnectionLostException;
+use Apntalk\EslReact\Exceptions\DrainException;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
@@ -271,7 +272,7 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
 
         $this->await($disconnect);
 
-        $this->expectException(ConnectionLostException::class);
+        $this->expectException(DrainException::class);
         try {
             $this->await($api);
         } finally {

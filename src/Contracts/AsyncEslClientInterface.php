@@ -66,9 +66,11 @@ interface AsyncEslClientInterface {
     /**
      * Gracefully disconnect.
      *
-     * Enters drain mode, sends EXIT, and resolves when socket close is observed.
-     * Explicit disconnect is terminal for this runtime instance and does not
-     * trigger reconnect. Pending bgapi jobs are rejected on this path.
+     * Enters drain mode and rejects new work immediately.
+     * Already-accepted inflight work is allowed to settle until the configured
+     * drain timeout; remaining work is then terminated deterministically before
+     * the socket is closed. Explicit disconnect is terminal for this runtime
+     * instance and does not trigger reconnect.
      *
      * @return PromiseInterface<void>
      */

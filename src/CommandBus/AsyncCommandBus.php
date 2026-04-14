@@ -85,20 +85,7 @@ final class AsyncCommandBus
      */
     public function onConnectionLost(): void
     {
-        $reason = new ConnectionLostException();
-
-        if ($this->inflight !== null) {
-            $inflight = $this->inflight;
-            $this->inflight = null;
-            $inflight['pending']->cancelTimer(fn ($t) => $this->loop->cancelTimer($t));
-            $inflight['pending']->reject($reason);
-        }
-
-        $queue = $this->queue;
-        $this->queue = [];
-        foreach ($queue as $entry) {
-            $entry['pending']->reject($reason);
-        }
+        $this->abortAll(new ConnectionLostException());
     }
 
     public function enterDrainMode(): void
@@ -129,6 +116,22 @@ final class AsyncCommandBus
     public function totalPendingCount(): int
     {
         return $this->inflightCount() + $this->queuedCount();
+    }
+
+    public function abortAll(\Throwable $reason): void
+    {
+        if ($this->inflight !== null) {
+            $inflight = $this->inflight;
+            $this->inflight = null;
+            $inflight['pending']->cancelTimer(fn ($t) => $this->loop->cancelTimer($t));
+            $inflight['pending']->reject($reason);
+        }
+
+        $queue = $this->queue;
+        $this->queue = [];
+        foreach ($queue as $entry) {
+            $entry['pending']->reject($reason);
+        }
     }
 
     private function pump(): void
