@@ -72,6 +72,42 @@ final class EventStreamIntegrationTest extends AsyncTestCase
         $server->close();
     }
 
+    public function testEventBurstIsDeliveredInSocketOrderWithoutDroppingFrames(): void
+    {
+        $server = $this->authenticatedServer();
+        $client = $this->authenticatedClient($server);
+
+        $seen = [];
+        $deferred = new Deferred();
+        $client->events()->onAnyEvent(function ($event) use (&$seen, $deferred): void {
+            $seen[] = $event->eventName() . ':' . $event->uniqueId();
+            if (count($seen) === 5) {
+                $deferred->resolve($seen);
+            }
+        });
+
+        for ($i = 1; $i <= 5; $i++) {
+            $server->emitPlainEvent([
+                'Event-Name' => 'CHANNEL_CREATE',
+                'Event-Sequence' => (string) $i,
+                'Unique-ID' => 'uuid-' . $i,
+            ]);
+        }
+
+        self::assertSame(
+            [
+                'CHANNEL_CREATE:uuid-1',
+                'CHANNEL_CREATE:uuid-2',
+                'CHANNEL_CREATE:uuid-3',
+                'CHANNEL_CREATE:uuid-4',
+                'CHANNEL_CREATE:uuid-5',
+            ],
+            $this->await($deferred->promise()),
+        );
+
+        $server->close();
+    }
+
     public function testRawEnvelopeAccessCoexistsWithTypedDispatch(): void
     {
         $server = $this->authenticatedServer();
@@ -190,6 +226,45 @@ final class EventStreamIntegrationTest extends AsyncTestCase
         self::assertSame(0, $rawCount);
         self::assertSame(0, $typedCount);
         self::assertSame(0, $unknownCount);
+
+        $server->close();
+    }
+
+    public function testPartialEventFrameIsReassembledAndDelivered(): void
+    {
+        $server = $this->authenticatedServer();
+        $client = $this->authenticatedClient($server);
+
+        $deferred = new Deferred();
+        $client->events()->onEvent('CHANNEL_CREATE', function ($event) use ($deferred): void {
+            $deferred->resolve($event);
+        });
+
+        $body = implode("\n", [
+            'Event-Name: CHANNEL_CREATE',
+            'Event-Sequence: 77',
+            'Unique-ID: uuid-fragmented',
+            'Channel-Name: sofia%2Finternal%2F3000',
+        ]);
+        $frame = sprintf(
+            "Content-Type: text/event-plain\nContent-Length: %d\n\n%s",
+            strlen($body),
+            $body,
+        );
+
+        $fragments = [
+            substr($frame, 0, 20),
+            substr($frame, 20, 17),
+            substr($frame, 37),
+        ];
+        $server->writeRawFrameFragments($server->activeConnection(), $fragments, 0.002);
+
+        /** @var ChannelLifecycleEvent $event */
+        $event = $this->await($deferred->promise(), 0.2);
+
+        self::assertSame('CHANNEL_CREATE', $event->eventName());
+        self::assertSame('uuid-fragmented', $event->uniqueId());
+        self::assertSame('sofia/internal/3000', $event->channelName());
 
         $server->close();
     }

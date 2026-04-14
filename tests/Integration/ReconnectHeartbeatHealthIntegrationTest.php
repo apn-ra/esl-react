@@ -7,14 +7,82 @@ use Apntalk\EslReact\Config\CommandTimeoutConfig;
 use Apntalk\EslReact\Config\HeartbeatConfig;
 use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Config\RuntimeConfig;
+use Apntalk\EslReact\Config\SubscriptionConfig;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
+use Apntalk\EslReact\Tests\Support\CollectingReplaySink;
 
 final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
 {
+    public function testConfiguredSubscriptionSeedAppliesOnFirstConnectAndReconnectRestore(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $client = AsyncEslRuntime::make(
+            RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: $server->port(),
+                password: 'ClueCon',
+                retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                heartbeat: HeartbeatConfig::disabled(),
+                subscriptions: SubscriptionConfig::forEvents('CHANNEL_CREATE')
+                    ->withFilter('Unique-ID', 'uuid-seeded'),
+            ),
+            $this->loop,
+        );
+
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain CHANNEL_CREATE', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('filter Unique-ID uuid-seeded', $command);
+            $server->writeCommandReply($connection, '+OK filter added');
+        });
+
+        $this->await($client->connect());
+
+        self::assertSame(['CHANNEL_CREATE'], $client->subscriptions()->activeEventNames());
+        self::assertTrue($client->subscriptions()->hasFilters());
+
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain CHANNEL_CREATE', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('filter Unique-ID uuid-seeded', $command);
+            $server->writeCommandReply($connection, '+OK filter added');
+        });
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            fn (): bool => $server->connectionCount() === 2
+                && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
+            0.5,
+        );
+
+        self::assertSame(
+            [
+                ['auth ClueCon', 'event plain CHANNEL_CREATE', 'filter Unique-ID uuid-seeded'],
+                ['auth ClueCon', 'event plain CHANNEL_CREATE', 'filter Unique-ID uuid-seeded'],
+            ],
+            $server->receivedCommandsByConnection(),
+        );
+
+        $server->close();
+    }
+
     public function testUnexpectedDisconnectReconnectsAndRestoresDesiredSessionState(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -246,6 +314,74 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertSame(SessionState::Disconnected, $disconnected->sessionState);
         self::assertFalse($disconnected->isLive);
         self::assertSame(['auth ClueCon', 'api status'], $server->receivedCommands());
+
+        $server->close();
+    }
+
+    public function testHeartbeatFailureTriggersRecoverableReconnectWithReplayEnabled(): void
+    {
+        $sink = new CollectingReplaySink();
+        $server = new ScriptedFakeEslServer($this->loop);
+        $client = AsyncEslRuntime::make(
+            RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: $server->port(),
+                password: 'ClueCon',
+                retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                heartbeat: HeartbeatConfig::withInterval(0.05, 0.01),
+                commandTimeout: CommandTimeoutConfig::withApiTimeout(0.2),
+                replayCaptureEnabled: true,
+                replayCaptureSinks: [$sink],
+            ),
+            $this->loop,
+        );
+
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command): void {
+            self::assertSame('api status', $command);
+            // Intentionally leave the probe unanswered so the next miss forces a recoverable close.
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $server->writeApiResponse($connection, "+OK after-heartbeat-recover\n");
+        });
+
+        $this->await($client->connect());
+
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            0.2,
+        );
+
+        $recovering = $client->health()->snapshot();
+        self::assertSame(ConnectionState::Reconnecting, $recovering->connectionState);
+        self::assertFalse($recovering->isLive);
+
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+                && $server->connectionCount() === 2,
+            0.4,
+        );
+
+        $sink->reset();
+        $reply = $this->await($client->api('status'));
+
+        self::assertSame("+OK after-heartbeat-recover\n", $reply->body());
+        self::assertCount(2, $sink->captured());
+        self::assertSame(
+            [
+                ['auth ClueCon', 'api status'],
+                ['auth ClueCon', 'api status'],
+            ],
+            $server->receivedCommandsByConnection(),
+        );
 
         $server->close();
     }

@@ -6,12 +6,13 @@ This package turns `apntalk/esl-core` into a usable long-lived async runtime: it
 
 Current implementation status:
 
-- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, health snapshots, and deterministic fake-server integration tests.
-- Present but still provisional relative to the plan: advanced heartbeat orchestration beyond the current minimal liveness probe, explicit backpressure policy hardening, replay hooks, and drain redesign.
+- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
+- Implemented and contract-stabilized in this pass: replay-safe runtime hook emission for supported runtime paths.
+- Present but still minimal relative to the plan: heartbeat orchestration beyond the current liveness probe and recover-on-silence behavior.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`.
-- `disconnect()` closes the active socket and resolves when close is observed. It is an explicit terminal shutdown for the runtime instance; automatic reconnect does not resume afterwards.
+- `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
 ---
 
@@ -151,6 +152,40 @@ Implemented bgapi contract in the current slice:
 - Pending bgapi jobs survive unexpected supervised reconnect and can still resolve on a later matching completion.
 - Explicit `disconnect()` is terminal for pending bgapi jobs and rejects them instead of waiting for later completion.
 
+### Backpressure and drain
+
+Current backpressure/drain contract:
+
+- Inflight work means accepted `api()` command-bus work plus pending `bgapi()` handles.
+- When the configured inflight threshold is reached, new `api()`, `bgapi()`, and live-session subscription/filter mutations are rejected deterministically with `BackpressureException`.
+- `disconnect()` enters drain mode and rejects new `api()`, `bgapi()`, and subscription/filter mutations with `DrainException`.
+- Accepted inflight work may finish until `BackpressureConfig::$drainTimeoutSeconds` expires.
+- When the drain deadline expires, remaining inflight work is rejected deterministically with `DrainException`, then the runtime closes terminally.
+
+### Replay hooks
+
+Replay capture is explicit and observational only.
+
+- Disabled capture has no side effects on runtime behavior.
+- Enabled capture emits `ReplayEnvelopeInterface` artifacts to configured `ReplayCaptureSinkInterface` sinks.
+- Stable artifact names in the current contract are:
+  - `api.dispatch`
+  - `api.reply`
+  - `bgapi.dispatch`
+  - `bgapi.ack`
+  - `bgapi.complete`
+  - `command.reply`
+  - `event.raw`
+  - `subscription.mutate`
+  - `filter.mutate`
+- Deterministic no-op subscription/filter mutations and rejected work emit nothing.
+- Sink failures are contained and do not crash the runtime.
+- Replay capture is not storage, playback, or process-restart recovery.
+- Unexpected reconnect preserves capture for later runtime traffic, but there is no durable persistence across process restart.
+
+See [docs/replay-hooks.md](docs/replay-hooks.md) for the current replay-hook contract.
+See [docs/replay-companion-package.md](docs/replay-companion-package.md) for the recommended future package boundary for durable storage and replay execution.
+
 ---
 
 ## Event listeners
@@ -211,6 +246,7 @@ $client->subscriptions()->subscribeAll();
 Current subscription/filter contract:
 
 - The baseline is explicit and caller-owned. The runtime does not silently subscribe to a broad event set for application code.
+- `RuntimeConfig::$subscriptions` seeds the runtime's initial desired event/filter state before the first successful connect/auth cycle.
 - Subscription and filter mutations are rejected before successful authentication and after disconnect.
 - The runtime tracks desired active subscriptions and filters in memory and restores them after a successful reconnect.
 - Duplicate subscribe/filter-add operations are idempotent no-ops.
@@ -276,7 +312,7 @@ This package is pre-1.0. The public API is not yet frozen.
 
 - `AsyncEslClientInterface`, `EventStreamInterface`, `SubscriptionManagerInterface`, `HealthReporterInterface`
 - Config objects: `RuntimeConfig`, `RetryPolicy`, `HeartbeatConfig`, `BackpressureConfig`, `SubscriptionConfig`, `CommandTimeoutConfig`
-- Read models and DTOs: `HealthSnapshot`, `ConnectionState`, `SessionState`, `RuntimeState`, `BgapiJobHandle`
+- Read models and DTOs: `HealthSnapshot`, `ConnectionState`, `SessionState`, `BgapiJobHandle`
 - Entry point: `AsyncEslRuntime::make()`
 - Documented exceptions
 

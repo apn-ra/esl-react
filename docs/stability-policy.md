@@ -37,7 +37,6 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Health\HealthSnapshot`
 - `Apntalk\EslReact\Connection\ConnectionState`
 - `Apntalk\EslReact\Session\SessionState`
-- `Apntalk\EslReact\Runtime\RuntimeState`
 - `Apntalk\EslReact\Bgapi\BgapiJobHandle`
 
 ### Exceptions
@@ -59,7 +58,8 @@ The following behaviors are considered stable even when the implementing types a
 - Reconnect behavior as documented in [reconnect-model.md](reconnect-model.md)
 - Bgapi job survival across reconnect
 - Subscription restore after reconnect
-- `ConnectionLostException` on inflight api commands during disconnect
+- `ConnectionLostException` on inflight api commands during unexpected transport loss
+- `DrainException` on accepted inflight work that is terminated by explicit bounded drain
 
 ---
 
@@ -77,13 +77,23 @@ Do not import internal classes. Do not rely on internal constructor signatures. 
 
 ---
 
-## Provisional APIs
+## Replay hook contract
 
-APIs marked `@provisional` in code or documentation are candidates for the stable surface but are not yet finalized. They may change between minor versions. Current provisional features:
+Replay hooks remain an internal implementation path, but the documented replay artifact contract in [replay-hooks.md](replay-hooks.md) is now treated as stable for the currently supported runtime-owned capture points.
 
-- Replay hook API (`RuntimeReplayCapture`, `ReplayCaptureSinkInterface`, `RuntimeConfig::$replayCaptureEnabled`)
+Stable artifact names:
 
-Provisional APIs will either be promoted to stable or removed before 1.0. If you build on a provisional API, monitor the changelog.
+- `api.dispatch`
+- `api.reply`
+- `bgapi.dispatch`
+- `bgapi.ack`
+- `bgapi.complete`
+- `command.reply`
+- `event.raw`
+- `subscription.mutate`
+- `filter.mutate`
+
+Future additions should be additive. Existing artifact names should not be renamed without a documented breaking change.
 
 ---
 
@@ -102,7 +112,7 @@ Provisional APIs will either be promoted to stable or removed before 1.0. If you
 - May add new config properties with documented defaults (additive)
 - May add new exception classes
 - May add new stable types
-- May change provisional APIs
+- May add replay-hook artifact types or metadata fields additively
 - Should not break existing usage of the stable surface
 - Will include a changelog entry for all stable surface changes
 
@@ -125,7 +135,7 @@ The package will reach 1.0 when:
 - Event dispatch ordering guarantees are reliable and tested
 - `bgapi` dispatch and completion tracking is stable
 - The health model is stable and complete
-- The replay hook API is either stable or explicitly removed from scope
+- The replay hook artifact contract is stable or replay hooks are explicitly removed from scope
 - `FakeEslServer` coverage is strong enough to protect against lifecycle regressions in CI without a live PBX
 - All docs accurately reflect implemented behavior
 

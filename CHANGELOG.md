@@ -18,6 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Minimal heartbeat/liveness wiring into health snapshots and disconnect recovery
 - Fake-server reconnect/heartbeat integration coverage for restore order, bounded retry, and health transitions
 - Deterministic bgapi integration coverage for ack, completion correlation, orphan timeout, and reconnect-era pending-job behavior
+- Deterministic backpressure/drain integration coverage for overload rejection, bounded drain shutdown, and health-state exposure
+- Deterministic replay-hook integration coverage for command dispatch/reply, bgapi ack/completion, inbound events, reconnect-era capture continuity, disabled capture, and sink-failure containment
+- Deterministic replay regression coverage for subscription/filter mutation capture, mutation rejection paths, malformed inbound traffic, heartbeat-driven reconnect, and drain-era pending bgapi behavior
+- Companion design note for a future replay package that would own durable storage, restart recovery, and replay execution
+- Contract-level coverage for startup subscription seeding, bounded drain semantics, bgapi handle ack behavior, and stable replay artifact identity fields
+- Focused integration coverage for configured startup subscription/filter seeding, reconnect-era restore from seeded desired state, event bursts, partial-frame event parsing, and replay-sink failure across reconnect continuity
 
 ### Changed
 - `AsyncEslClientInterface` now explicitly declares `connect()`, matching the documented public contract
@@ -29,12 +35,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Recovery now re-authenticates first, restores the desired event baseline, restores filters, and only then returns to the live state
 - `api()` and subscription/filter mutations now fail closed while reconnect recovery is in progress
 - `bgapi()` now returns a real tracked handle whose Job-UUID appears after ack, resolves only on matching `BACKGROUND_JOB`, survives unexpected supervised reconnect, and rejects on explicit shutdown or orphan timeout
+- Overload is now an explicit runtime-wide accepted-work threshold covering `api()`, `bgapi()`, and live-session subscription/filter mutations
+- `disconnect()` now enters bounded drain mode, rejects new work immediately, allows accepted inflight work to settle up to `drainTimeoutSeconds`, then terminates remaining work deterministically before closing terminally
+- Health snapshots now expose total inflight work and overload state in addition to drain state
+- Replay capture is now a real observational runtime slice: capture is explicitly configurable, emits replay envelopes for command/event/bgapi paths, survives supervised reconnect for later traffic, and contains sink failures without crashing the live runtime
+- Replay capture now has a stable artifact vocabulary and versioned metadata contract for the currently supported runtime-owned paths, including accepted subscription/filter mutations
+- Heartbeat/liveness now explicitly uses a bounded two-step model: first miss degrades and may issue one safe probe, second consecutive miss forces a recoverable close
+- `RuntimeConfig::$subscriptions` is now applied as real startup desired-state seeding instead of being an inert public config surface
+- Public docs now de-scope `RuntimeState` from the stable consumer surface and describe the actual `RuntimeClient`-centered implementation instead of plan-era internal component names
 
 ### Documentation
 - README, public API reference, and runtime lifecycle docs now distinguish implemented lifecycle guarantees from later planned runtime behavior
 - Public contracts: AsyncEslClientInterface, EventStreamInterface, SubscriptionManagerInterface, HealthReporterInterface
 - Config objects: RuntimeConfig, RetryPolicy, HeartbeatConfig, BackpressureConfig, SubscriptionConfig, CommandTimeoutConfig
-- Read models: HealthSnapshot, ConnectionState, SessionState, RuntimeState, BgapiJobHandle
+- Read models: HealthSnapshot, ConnectionState, SessionState, BgapiJobHandle
 - FakeEslServer test infrastructure for deterministic CI without a live PBX
 - docs/async-model.md: explicit async contract, timeout, cancellation, ordering, listener policy
 - docs/runtime-lifecycle.md: connection/session state machine

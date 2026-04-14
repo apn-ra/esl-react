@@ -4,7 +4,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
-Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, close-based `disconnect()`, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, and health snapshots. Replay hooks, backpressure-policy expansion, and broader heartbeat orchestration remain provisional.
+Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
 
 ---
 
@@ -37,17 +37,19 @@ Current contract notes for the implemented slice:
 
 - `connect()` rejects with `AuthenticationException` for auth rejection, `CommandTimeoutException` for handshake timeout, and `ConnectionException` for transport or malformed-handshake failures.
 - `api()` is illegal before successful authentication and rejects with `ConnectionException`.
-- Inflight `api()` calls reject with `ConnectionLostException` if the socket closes before their reply arrives.
+- Inflight `api()` calls reject with `ConnectionLostException` on unexpected transport loss and with `DrainException` if bounded drain terminates them during explicit shutdown.
 - `api()` and subscription/filter mutations are rejected while the runtime is recovering after an unexpected disconnect.
 - `disconnect()` is terminal for the runtime instance; it does not trigger reconnect.
+- `disconnect()` is a bounded drain, not an immediate abort: new work is rejected immediately, accepted inflight work gets a bounded settle window, and remaining work is rejected deterministically at the drain deadline.
 - `bgapi()` is illegal before successful authentication and during recovery.
 - `bgapi()` returns a handle immediately; `BgapiJobHandle::jobUuid()` becomes non-empty only after FreeSWITCH acknowledges the bgapi command.
-- Pending bgapi jobs survive unexpected supervised reconnect but are rejected on explicit shutdown.
+- Pending bgapi jobs survive unexpected supervised reconnect but are rejected with `DrainException` on explicit shutdown.
+- Overload rejects new `api()`, `bgapi()`, and live-session subscription/filter mutations with `BackpressureException`.
 
 | Method | Return type | Description |
 |---|---|---|
 | `connect()` | `PromiseInterface<void>` | Establish connection and authenticate; repeated calls share the active connect promise until it settles |
-| `disconnect()` | `PromiseInterface<void>` | Close the active socket and resolve when close is observed; full drain semantics remain provisional |
+| `disconnect()` | `PromiseInterface<void>` | Enter drain mode, stop accepting new work, wait up to the drain timeout, then close terminally |
 | `api(string $command)` | `PromiseInterface<ApiReply>` | Dispatch a serial api command |
 | `bgapi(string $command, string $args)` | `BgapiJobHandle` | Dispatch a bgapi command, return a tracked handle immediately |
 | `events()` | `EventStreamInterface` | Access the event stream |
@@ -94,11 +96,13 @@ Apntalk\EslReact\Contracts\SubscriptionManagerInterface
 Current subscription/filter notes:
 
 - The baseline is explicit and caller-owned; the runtime does not invent a broad default application subscription policy.
+- `RuntimeConfig::$subscriptions` seeds the initial desired event/filter state before the first successful authentication.
 - Mutations are only allowed while the runtime is authenticated and not draining.
 - Desired active subscriptions and filters are tracked locally in memory.
 - Duplicate subscribe/filter-add operations and removal of missing state are idempotent no-ops.
 - `subscribeAll()` is supported, but specific unsubscribe from the "all events" state is rejected in the current implementation.
 - After a successful reconnect, the runtime restores `subscribeAll()` or the named desired event set first, then restores desired filters.
+- When the runtime is overloaded, subscription/filter mutations are rejected with `BackpressureException`.
 
 ### HealthReporterInterface
 
@@ -117,6 +121,8 @@ Current health notes:
 - `snapshot()->reconnectAttempts` reflects retry attempts since the last successful authenticated connection and resets to zero after recovery succeeds.
 - `snapshot()->isLive` is driven by the currently implemented minimal heartbeat monitor. A false value may mean either a degraded but still-authenticated connection or a disconnected/recovering runtime.
 - `snapshot()->pendingBgapiJobCount` includes jobs that are still pending across an unexpected reconnect.
+- `snapshot()->totalInflightCount` is the runtime-wide accepted work count used by overload and drain decisions.
+- `snapshot()->isOverloaded` reflects whether new work would currently be rejected for backpressure reasons.
 
 ---
 
@@ -138,9 +144,10 @@ Apntalk\EslReact\Config\RuntimeConfig
 | `retryPolicy` | `RetryPolicy` | Reconnect retry policy |
 | `heartbeat` | `HeartbeatConfig` | Heartbeat monitoring config |
 | `backpressure` | `BackpressureConfig` | Backpressure thresholds |
-| `subscriptions` | `SubscriptionConfig` | Default subscriptions |
+| `subscriptions` | `SubscriptionConfig` | Initial desired subscription/filter intent to seed on first connect |
 | `commandTimeout` | `CommandTimeoutConfig` | Command timeout config |
 | `replayCaptureEnabled` | `bool` | Enable replay hook emission (default false) |
+| `replayCaptureSinks` | `list<ReplayCaptureSinkInterface>` | Sinks that receive replay envelopes when capture is enabled |
 
 ### RetryPolicy
 
@@ -181,8 +188,9 @@ Apntalk\EslReact\Config\BackpressureConfig
 
 | Property | Type | Description |
 |---|---|---|
-| `maxInflightCommands` | `int` | Maximum concurrent api commands before rejecting new ones |
-| `rejectOnOverload` | `bool` | Whether overload currently rejects instead of buffering indefinitely |
+| `maxInflightCommands` | `int` | Current runtime-wide accepted-work threshold for overload rejection |
+| `rejectOnOverload` | `bool` | Whether overload rejects new work instead of buffering indefinitely |
+| `drainTimeoutSeconds` | `float` | Maximum time accepted inflight work may continue after drain begins |
 
 ### SubscriptionConfig
 
@@ -192,9 +200,9 @@ Apntalk\EslReact\Config\SubscriptionConfig
 
 | Property | Type | Description |
 |---|---|---|
-| `initialEventNames` | `array<string>` | Event names configured for initial subscription intent |
-| `subscribeAll` | `bool` | Whether to issue `event all` on connect |
-| `initialFilters` | `array<array{headerName: string, headerValue: string}>` | Header filters configured for initial intent |
+| `initialEventNames` | `array<string>` | Event names that seed the runtime's initial desired subscription set |
+| `subscribeAll` | `bool` | Whether the runtime should seed its initial desired state as `event plain all` |
+| `initialFilters` | `array<array{headerName: string, headerValue: string}>` | Header filters that seed the runtime's initial desired filter set |
 
 ### CommandTimeoutConfig
 
@@ -239,14 +247,6 @@ Apntalk\EslReact\Session\SessionState
 
 Backed enum. Values: `NotStarted`, `Authenticating`, `Active`, `Disconnected`, `Failed`.
 
-### RuntimeState
-
-```
-Apntalk\EslReact\Runtime\RuntimeState
-```
-
-Composite value object summarizing the current connection and session states alongside liveness. Available via `HealthSnapshot::$runtimeState`.
-
 ### BgapiJobHandle
 
 ```
@@ -285,14 +285,13 @@ All exception classes are under `Apntalk\EslReact\Exceptions\`.
 
 The following components exist as implementation details and are not part of the stable public surface. Do not import or depend on them. They may change at any time until 1.0.
 
-- `ConnectionSupervisor` and its scheduler
-- `HeartbeatMonitor` and related liveness internals
-- `BackpressureController`, `InflightCounter`, `PauseResumeGate`
-- `CommandCorrelationMap`, `PendingCommand`, `CommandTimeoutRegistry`
+- `RuntimeClient` and its reconnect/drain lifecycle internals
+- `HeartbeatMonitor`, `IdleTimer`, and related liveness internals
+- `AsyncCommandBus` and `PendingCommand`
 - `FrameReader`, `FrameWriter`, `EnvelopePump`
 - `InboundMessageRouter`, `OutboundMessageDispatcher`
-- `ResubscriptionPlanner`, `ActiveSubscriptionSet`
-- `RuntimeReplayCapture`, `ReplayEnvelopeFactory`
-- `BgapiCompletionMatcher`, `BgapiJobTracker`, `PendingBgapiJob`
-- `DisconnectClassifier`, `CircuitState`
-- `TypedEventEmitter`, `EventDispatchContext`
+- `ActiveSubscriptionSet`, `FilterManager`, and subscription-state internals
+- `RuntimeReplayCapture` and replay-shaping internals
+- `BgapiJobTracker`, `PendingBgapiJob`, and bgapi dispatcher internals
+- `ReconnectScheduler`, `CircuitState`
+- `TypedEventEmitter`, `UnknownEventHandler`, `EventDispatchContext`

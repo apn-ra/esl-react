@@ -125,6 +125,11 @@ final class ScriptedFakeEslServer
         $this->requireActiveConnection()->close();
     }
 
+    public function activeConnection(): ConnectionInterface
+    {
+        return $this->requireActiveConnection();
+    }
+
     public function close(): void
     {
         $this->server->close();
@@ -159,6 +164,18 @@ final class ScriptedFakeEslServer
     public function writeRawFrame(ConnectionInterface $connection, string $frame): void
     {
         $this->writeFrame($connection, $frame);
+    }
+
+    /**
+     * @param list<string> $fragments
+     */
+    public function writeRawFrameFragments(ConnectionInterface $connection, array $fragments, float $delaySeconds = 0.0): void
+    {
+        foreach (array_values($fragments) as $index => $fragment) {
+            $this->loop->addTimer($delaySeconds * $index, function () use ($connection, $fragment): void {
+                $this->writeFrame($connection, $fragment);
+            });
+        }
     }
 
     public function emitPlainEventTo(ConnectionInterface $connection, array $headers, string $body = ''): void

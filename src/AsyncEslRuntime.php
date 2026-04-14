@@ -23,6 +23,7 @@ use Apntalk\EslReact\Protocol\FrameReader;
 use Apntalk\EslReact\Protocol\FrameWriter;
 use Apntalk\EslReact\Protocol\InboundMessageRouter;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
+use Apntalk\EslReact\Replay\RuntimeReplayCapture;
 use Apntalk\EslReact\Runtime\RuntimeClient;
 use Apntalk\EslReact\Subscription\ActiveSubscriptionSet;
 use Apntalk\EslReact\Subscription\FilterManager;
@@ -42,6 +43,29 @@ final class AsyncEslRuntime
 
         $correlation = new CorrelationContext(ConnectionSessionId::generate());
         $eventStream = new EventStream(new EventFactory(), $correlation);
+        $replay = new RuntimeReplayCapture(
+            correlation: $correlation,
+            sinks: $config->replayCaptureSinks,
+            enabled: $config->replayCaptureEnabled,
+            runtimeMetadataProvider: static function () use (&$client): array {
+                if (!$client instanceof RuntimeClient) {
+                    return [];
+                }
+
+                return [
+                    'runtime-connection-state' => $client->connectionState()->value,
+                    'runtime-session-state' => $client->sessionState()->value,
+                    'runtime-liveness-state' => $client->livenessState()->name,
+                    'runtime-reconnect-attempts' => (string) $client->reconnectAttempts(),
+                    'runtime-connection-generation' => (string) $client->connectionGeneration(),
+                    'runtime-draining' => $client->isDraining() ? 'true' : 'false',
+                    'runtime-overloaded' => $client->isOverloaded() ? 'true' : 'false',
+                ];
+            },
+        );
+        $eventStream->onRawEnvelope(static function ($envelope) use ($replay): void {
+            $replay->captureEventEnvelope($envelope);
+        });
         $outbound = new OutboundMessageDispatcher(new FrameWriter(new CommandSerializer()));
         $commandBus = new AsyncCommandBus(
             sendFn: static function ($command) use ($outbound): void {
@@ -57,24 +81,37 @@ final class AsyncEslRuntime
                 return $commandBus->dispatch($command, $description, $timeoutSeconds);
             },
             ackTimeoutSeconds: $config->commandTimeout->bgapiAckTimeoutSeconds,
+            replayCapture: $replay,
         );
         $idleTimer = new IdleTimer();
         $heartbeat = new HeartbeatMonitor($config->heartbeat, $idleTimer, $loop);
+        $activeSubscriptions = new ActiveSubscriptionSet();
+        if ($config->subscriptions->subscribeAll) {
+            $activeSubscriptions->subscribeAll();
+        } elseif ($config->subscriptions->initialEventNames !== []) {
+            $activeSubscriptions->subscribe(...$config->subscriptions->initialEventNames);
+        }
+
+        $filters = new FilterManager();
+        foreach ($config->subscriptions->initialFilters as $filter) {
+            $filters->addFilter($filter['headerName'], $filter['headerValue']);
+        }
+
         $subscriptions = new SubscriptionManager(
-            activeSubscriptions: new ActiveSubscriptionSet(),
-            filters: new FilterManager(),
+            activeSubscriptions: $activeSubscriptions,
+            filters: $filters,
             dispatchCommand: static function (CommandInterface $command, string $description, float $timeoutSeconds) use ($commandBus) {
                 return $commandBus->dispatch($command, $description, $timeoutSeconds);
             },
             timeoutSeconds: $config->commandTimeout->subscriptionTimeoutSeconds,
-            canMutateLiveSession: static function () use (&$client): bool {
+            assertCanMutateLiveSession: static function () use (&$client): void {
                 if (!$client instanceof RuntimeClient) {
-                    return false;
+                    throw new \LogicException('Runtime client not initialized');
                 }
 
-                return $client->connectionState()->canAcceptCommands()
-                    && !$client->isDraining();
+                $client->assertCanAcceptSessionMutation();
             },
+            replayCapture: $replay,
         );
         $client = new RuntimeClient(
             config: $config,
@@ -90,6 +127,7 @@ final class AsyncEslRuntime
             subscriptions: $subscriptions,
             reconnects: new ReconnectScheduler($config->retryPolicy, $loop),
             heartbeat: $heartbeat,
+            replay: $replay,
         );
 
         $health = new RuntimeHealthReporter(
@@ -97,7 +135,9 @@ final class AsyncEslRuntime
             sessionStateProvider: static fn () => $client->sessionState(),
             livenessProvider: static fn () => $client->livenessState(),
             inflightCountProvider: static fn () => $client->inflightCommandCount(),
-            bgapiPendingCountProvider: static fn () => $bgapiTracker->pendingCount(),
+            bgapiPendingCountProvider: static fn () => $client->pendingBgapiCount(),
+            totalInflightCountProvider: static fn () => $client->totalInflightWorkCount(),
+            overloadedProvider: static fn () => $client->isOverloaded(),
             subscriptionsProvider: static fn () => $subscriptions->activeEventNames(),
             reconnectAttemptsProvider: static fn () => $client->reconnectAttempts(),
             drainingProvider: static fn () => $client->isDraining(),

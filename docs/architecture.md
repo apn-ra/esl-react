@@ -2,155 +2,133 @@
 
 ## Package layering
 
-```
+```text
 apntalk/laravel-freeswitch-esl
-  Laravel service provider, database-backed PBX registry,
-  multi-PBX orchestration policy, application control plane
+  Laravel integration, control plane, persistence-backed PBX selection
         |
         v
 apntalk/esl-react
-  Async runtime: connection lifecycle, command dispatch,
-  event streaming, reconnect supervision, health
+  Async inbound ESL runtime: connection lifecycle, command dispatch,
+  event streaming, reconnect, liveness, health, replay hooks
         |
         v
 apntalk/esl-core
   Protocol substrate: parsing, serialization, typed models,
-  replay envelope primitives
+  correlation metadata, replay envelope primitives
 ```
 
-Each layer has a strict upward direction. `esl-react` depends on `esl-core`. `laravel-freeswitch-esl` depends on `esl-react`. Neither lower layer has any knowledge of the layer above it.
+`esl-react` depends on `esl-core`. It remains framework-agnostic and runtime-focused.
 
 ---
 
-## esl-react owned responsibilities
+## What this package owns
 
-These responsibilities belong exclusively to this package:
+- TCP socket lifecycle for an inbound ESL client connection
+- ESL auth handshake and session lifecycle
+- Live protocol read/write loop
+- Serial `api()` command dispatch and reply handling
+- `bgapi()` dispatch, ack tracking, completion correlation, and orphan cleanup
+- Raw and typed event streaming
+- Desired subscription/filter state and reconnect restore
+- Reconnect supervision with bounded retry/backoff
+- Minimal bounded heartbeat/liveness tracking
+- Runtime health snapshots
+- Backpressure rejection and bounded drain shutdown
+- Observational replay-safe runtime hook emission
 
-- Socket connection lifecycle (open, close, error handling)
-- Async read and write pumps
-- ESL authentication handshake and session lifecycle
-- Async `api` command dispatch and reply correlation
-- `bgapi` dispatch, job tracking, and completion matching
-- Inbound event routing and typed listener delivery
-- Reconnect supervision and retry scheduling
-- Active subscription and filter management across reconnects
-- Heartbeat monitoring and liveness state
-- Backpressure control and drain mode
-- Runtime health snapshot emission
-- Replay-safe runtime hook emission
+## What this package does not own
 
-The following are explicitly NOT owned by this package:
-
-- Laravel framework integration
-- Application container wiring
-- Database-backed PBX registry
-- Cross-node routing or ownership policy
-- Durable replay storage or playback
-- Business-rule event interpretation
+- Laravel or service-container integration
+- Persistent storage or registry concerns
+- Multi-PBX orchestration or control-plane ownership
+- Durable replay storage or replay execution
+- Outbound ESL server behavior
+- Business-specific telephony normalization
 
 ---
 
-## Internal component map
+## Actual implementation composition
 
-### Connection
+The implementation is centered around one internal coordinator plus a small set of focused helpers. The plan-era class names should be read as responsibilities, not as a promise that every responsibility exists as its own class.
 
-`ReactSocketConnector`, `ConnectionFactory`, `AsyncConnection`
+### Runtime coordinator
 
-Responsible for TCP socket management: opening connections via `react/socket`, tracking raw socket state, and surfacing connection-level errors. `ConnectionState` is the observable state machine associated with the connection layer.
+`RuntimeClient`
 
-### Session
+Coordinates connection establishment, auth, reconnect, bounded drain shutdown, work acceptance/rejection, desired-state restore, and liveness transitions. This is the internal implementation behind `AsyncEslClientInterface`.
 
-`SessionAuthenticator`, `SessionLifecycle`, `SessionMetadata`
-
-Responsible for the ESL auth handshake after TCP connection is established. Manages the transition from connected to authenticated. `SessionState` tracks auth progress. `SessionMetadata` captures per-session identifiers.
-
-### Protocol
+### Protocol path
 
 `FrameReader`, `FrameWriter`, `EnvelopePump`, `InboundMessageRouter`, `OutboundMessageDispatcher`
 
-Bridges the raw socket bytes to and from `esl-core` parsed types. `FrameReader` and `FrameWriter` handle low-level framing. `EnvelopePump` drives the read loop. `InboundMessageRouter` classifies inbound messages as replies, events, or bgapi completions and routes each to the appropriate subsystem. `OutboundMessageDispatcher` serializes and writes commands.
+Reads raw socket bytes into `esl-core` frames, writes outbound commands, and classifies inbound traffic into replies, events, disconnect notices, or unroutable input.
 
-### CommandBus
+### Command path
 
-`AsyncCommandBus`, `PendingCommand`, `CommandTimeoutRegistry`, `CommandCorrelationMap`
+`AsyncCommandBus`, `PendingCommand`
 
-Manages the serial `api` command queue. Accepts a command, writes it via the Protocol layer, registers a correlation entry, and resolves the caller's promise when the matching reply arrives. Enforces per-command timeouts via `CommandTimeoutRegistry`.
+Implements the serial `api()` queue required by ESL. Handles FIFO dispatch, reply correlation, timeout rejection, connection-loss rejection, and drain-time termination for accepted command work.
 
-### Events
+### Event path
 
 `EventStream`, `TypedEventEmitter`, `UnknownEventHandler`, `EventDispatchContext`
 
-Receives classified events from the router. Emits to registered raw envelope listeners first, then routes to typed listeners by event class, then falls through to unknown-event listeners for unrecognized event names. Catches listener exceptions and forwards them to the configured error handler.
+Delivers raw event envelopes first, then typed events or the explicit unknown-event path. Listener failures are contained and do not crash the runtime.
 
-### Subscription
+### Subscription/filter state
 
-`SubscriptionManager`, `ActiveSubscriptionSet`, `FilterManager`, `ResubscriptionPlanner`
+`SubscriptionManager`, `ActiveSubscriptionSet`, `FilterManager`
 
-Tracks which event names the consumer has subscribed to and which filters are active. On reconnect, `ResubscriptionPlanner` issues the required `event` and `filter` commands to restore the prior subscription state.
+Keeps desired event/filter state in memory. `RuntimeConfig::$subscriptions` seeds that desired state before the first successful authentication. On reconnect, the same desired state is replayed in deterministic order: event baseline first, then filters.
 
-### Supervisor
+### Reconnect and liveness
 
-`ConnectionSupervisor`, `ReconnectScheduler`, `CircuitState`, `DisconnectClassifier`
+`ReconnectScheduler`, `CircuitState`, `HeartbeatMonitor`, `IdleTimer`, `LivenessState`
 
-The top-level runtime watchdog. Observes connection state transitions, classifies disconnect reasons, and schedules reconnect attempts according to `RetryPolicy`. Controls the circuit state to prevent uncontrolled reconnect loops.
+Reconnect uses `RetryPolicy` for bounded retry/backoff. Liveness is intentionally minimal: inbound activity keeps the runtime live, one missed liveness check degrades state and may issue one safe probe, and a second consecutive miss closes the socket and falls into the normal disconnect/reconnect path.
 
-### Heartbeat
-
-`HeartbeatMonitor`, `IdleTimer`, `LivenessState`
-
-Sends periodic heartbeat commands and tracks acknowledgment timing. Transitions `LivenessState` between live, degraded, and unresponsive based on heartbeat results. Configurable via `HeartbeatConfig`.
-
-### Health
+### Health and observability
 
 `RuntimeHealthReporter`, `HealthSnapshot`
 
-Collects state from Connection, Session, CommandBus, Bgapi, Subscription, Heartbeat, and Supervisor to build a point-in-time `HealthSnapshot`. The snapshot is the primary operational observability surface exposed to consumers.
+Builds point-in-time health snapshots exposing connection/session state, liveness, reconnect attempts, active subscriptions, accepted-work counts, overload state, drain state, and the last recorded error.
 
-### Bgapi
+### Bgapi tracking
 
-`BgapiDispatcher`, `BgapiJobTracker`, `PendingBgapiJob`, `BgapiCompletionMatcher`
+`BgapiDispatcher`, `BgapiJobTracker`, `PendingBgapiJob`
 
-Handles `bgapi` dispatch separately from the serial `api` queue. Issues the command, immediately returns a `BgapiJobHandle` containing the job UUID, and registers the UUID in `BgapiJobTracker`. When a `BACKGROUND_JOB` event arrives, `BgapiCompletionMatcher` resolves the matching handle's promise.
+Returns a tracked handle immediately, assigns `Job-UUID` on ack, correlates `BACKGROUND_JOB` completion by UUID, and applies orphan timeout or explicit terminal shutdown semantics when completion never arrives.
 
-### Backpressure
+### Replay hooks
 
-`BackpressureController`, `InflightCounter`, `BufferPolicy`, `PauseResumeGate`
+`RuntimeReplayCapture`
 
-Tracks inflight command count and enforces configured thresholds. Can pause the read pump or reject new commands when overload thresholds are exceeded. Manages drain mode: stops accepting new work and waits for inflight operations to complete before allowing shutdown.
-
-### Replay
-
-`RuntimeReplayCapture`, `ReplayEnvelopeFactory`, `ReplayDispatchContext`
-
-When replay capture is enabled via `RuntimeConfig::$replayCaptureEnabled`, this component emits `ReplayEnvelope` objects (defined in `esl-core`) on the command reply, event, and bgapi completion paths. Consumers supply a `ReplayCaptureSinkInterface` implementation. This is a hook emission layer only — no storage, no playback.
+Observes accepted dispatch, replies, inbound events, and bgapi lifecycle points, then emits replay-safe envelopes to configured sinks. This is a hook emission layer only; it is not storage, replay execution, or a control plane.
 
 ---
 
-## How components wire together at runtime
+## Runtime wiring
 
-At startup, `AsyncEslRuntime::make()` constructs and wires all components:
+`AsyncEslRuntime::make()` assembles the runtime like this:
 
-1. `ConnectionSupervisor` is created and given the `RetryPolicy` and a factory for `AsyncConnection`.
-2. `AsyncConnection` holds references to the `Protocol` components, `CommandBus`, `EventStream`, `BgapiDispatcher`, `SubscriptionManager`, and `HeartbeatMonitor`.
-3. `InboundMessageRouter` routes each parsed envelope to one of: `CommandBus` (reply), `EventStream` (event), or `BgapiCompletionMatcher` (bgapi completion).
-4. `SessionAuthenticator` runs once per connection immediately after TCP establishment.
-5. After authentication, `ResubscriptionPlanner` replays any active subscriptions and filters.
-6. `HeartbeatMonitor` begins its idle timer.
-7. `BackpressureController` wraps the `CommandBus` and can gate command acceptance.
-8. `RuntimeHealthReporter` collects state from all components on demand.
-9. `RuntimeReplayCapture` (if enabled) taps the reply, event, and bgapi paths.
-
-The `ConnectionSupervisor` restarts the connection path from step 2 on disconnect, without replacing the higher-level components (`EventStream`, `SubscriptionManager`, `BgapiJobTracker`), which survive reconnect.
+1. Build correlation and replay capture infrastructure.
+2. Build protocol, command, bgapi, heartbeat, health, and reconnect helpers.
+3. Seed desired subscription/filter state from `RuntimeConfig::$subscriptions`.
+4. Construct `RuntimeClient` with the long-lived helpers above.
+5. On successful authentication, restore desired session state, mark the runtime live, and start heartbeat monitoring.
+6. On unexpected disconnect, keep long-lived helpers such as event listeners, desired-state tracking, bgapi tracking, and replay capture alive while the socket is re-established.
+7. On explicit `disconnect()`, enter bounded drain and close terminally without reconnecting.
 
 ---
 
-## Facade orientation
+## Public orientation
 
-Consumers interact with the runtime through four narrow contracts:
+Consumers should code against the narrow public surface only:
 
-- `AsyncEslClientInterface` — command dispatch, connect/disconnect
-- `EventStreamInterface` — listener registration
-- `SubscriptionManagerInterface` — subscription and filter management
-- `HealthReporterInterface` — health snapshot access
+- `AsyncEslClientInterface`
+- `EventStreamInterface`
+- `SubscriptionManagerInterface`
+- `HealthReporterInterface`
+- `AsyncEslRuntime::make()`
 
-These contracts are obtained through `AsyncEslRuntime::make()`. Consumers should not depend on any internal component class directly. All internal types are subject to change until 1.0.
+Everything else is internal, even if it happens to live under `src/`.

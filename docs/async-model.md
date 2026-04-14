@@ -30,6 +30,12 @@ $client->api('status')->then(
 
 If a command cannot be accepted (e.g., backpressure limit reached, runtime is draining), the promise is rejected with the relevant exception before the command enters the queue.
 
+Current inflight accounting for overload and drain:
+
+- accepted `api()` command-bus work counts as inflight until it resolves, times out, is lost on disconnect, or is terminated by drain
+- accepted `bgapi()` handles count as inflight until they resolve, time out, or are terminated
+- event listeners do not get a separate buffered queue in this phase
+
 ### bgapi commands
 
 `bgapi` commands share the serialized command/reply path for their initial acceptance reply, but their eventual completion is tracked separately from `api()`.
@@ -48,6 +54,7 @@ See [bgapi-tracking.md](bgapi-tracking.md) for full bgapi behavior.
 Subscription and filter mutations use the same authenticated live-session command path as other runtime commands, but they remain a separate control surface from `api()`.
 
 - The runtime starts with an explicit caller-owned baseline: no broad application event subscription is invented automatically.
+- `RuntimeConfig::$subscriptions` seeds that desired baseline before the first successful authentication.
 - `subscribe()` sends the full desired named-event set for the live session.
 - `unsubscribe()` sends either the reduced named-event set or `noevents` when the desired set becomes empty.
 - `subscribeAll()` switches the desired state to all events.
@@ -55,7 +62,9 @@ Subscription and filter mutations use the same authenticated live-session comman
 - Duplicate subscribe/filter-add operations and removal of missing state are treated as deterministic no-ops.
 - Mutations before successful authentication, while draining, or after disconnect are rejected with `ConnectionException`.
 
-The desired subscription/filter state is intentionally kept in memory so the runtime can restore it after a successful reconnect. Broader replay semantics are still not implemented in this phase. No mutation queue exists during recovery: subscription/filter mutations attempted while reconnect is in progress reject with `ConnectionException`.
+The desired subscription/filter state is intentionally kept in memory so the runtime can restore it after a successful reconnect. That desired state is initially seeded from `RuntimeConfig::$subscriptions`, then mutated by live-session subscription/filter calls. Broader replay semantics are still not implemented in this phase. No mutation queue exists during recovery: subscription/filter mutations attempted while reconnect is in progress reject with `ConnectionException`.
+
+When the runtime is overloaded, subscription/filter mutations reject with `BackpressureException`. When the runtime is draining, they reject with `DrainException`.
 
 ## Reconnect and recovery command behavior
 
@@ -65,6 +74,60 @@ The desired subscription/filter state is intentionally kept in memory so the run
 - After successful re-authentication, the runtime restores the desired event subscription baseline first (`subscribeAll()` or the named event set), then restores desired filters, then marks the runtime live again.
 - `api()` during recovery rejects with `ConnectionException`. Commands are not queued for post-reconnect replay in this phase.
 - `bgapi()` during recovery also rejects with `ConnectionException`. Pending bgapi jobs that were already accepted remain tracked separately.
+- During drain, new `api()`, `bgapi()`, and subscription/filter mutations reject with `DrainException`.
+
+## Backpressure and overload
+
+The current runtime uses a single explicit accepted-work threshold from `BackpressureConfig::$maxInflightCommands`.
+
+- When `rejectOnOverload` is enabled, new `api()`, `bgapi()`, and live-session subscription/filter mutations are rejected once the runtime-wide inflight count reaches the threshold.
+- The runtime-wide inflight count is `inflightCommandCount + pendingBgapiJobCount`.
+- The runtime does not silently create an unbounded deferred-work queue in this phase.
+- Already-received protocol traffic is still processed normally; overload only gates new caller-originated work.
+
+## Drain behavior
+
+`disconnect()` now enters bounded drain mode:
+
+1. New `api()`, `bgapi()`, and subscription/filter mutations are rejected immediately with `DrainException`.
+2. Already-accepted inflight work is allowed to settle until `BackpressureConfig::$drainTimeoutSeconds` expires.
+3. If all inflight work settles before the deadline, the runtime sends `exit` and closes terminally.
+4. If inflight work remains at the deadline, the runtime rejects that remaining work with `DrainException`, then closes terminally.
+
+Drain does not queue new work for later replay, and the final close does not trigger reconnect for that runtime instance.
+
+## Replay hooks
+
+Replay hooks are observational only in the current implementation.
+
+- Capture is disabled by default.
+- When enabled, the runtime emits replay-safe envelopes to configured `ReplayCaptureSinkInterface` sinks.
+- The current stable artifact vocabulary is:
+  - `api.dispatch`
+  - `api.reply`
+  - `bgapi.dispatch`
+  - `bgapi.ack`
+  - `bgapi.complete`
+  - `command.reply`
+  - `event.raw`
+  - `subscription.mutate`
+  - `filter.mutate`
+- `replay-artifact-version=1` is emitted on every artifact.
+- Implemented capture points are:
+  - accepted `api()` dispatch intent
+  - accepted `bgapi()` dispatch intent
+  - command reply receipt
+  - inbound event receipt on the live event path
+  - bgapi ack after `Job-UUID` assignment
+  - bgapi completion after matching `BACKGROUND_JOB`
+  - accepted subscription mutation commands
+  - accepted filter mutation commands
+- Rejected operations do not emit dispatch artifacts. For example, overload and drain rejections fail closed without creating replay work.
+- Deterministic no-op subscription/filter mutations also emit nothing because no live-session command is sent.
+- Capture callbacks run synchronously on the event loop. Sinks must not block.
+- If a sink throws, the runtime contains that failure, continues normal processing, and currently writes a short message to stderr.
+
+Replay hooks do not add persistence, replay execution, mutation queueing, or process-restart recovery. Across supervised reconnect, the same configured sinks continue receiving later runtime traffic, but already-lost traffic is not reconstructed.
 
 ---
 
@@ -183,9 +246,9 @@ Listener exceptions are not currently surfaced through a stable public callback 
 The current heartbeat implementation is intentionally minimal:
 
 - Every successfully parsed inbound frame records activity.
-- When the runtime stays idle beyond `HeartbeatConfig::$timeoutSeconds`, `isLive` becomes false.
-- If the runtime is authenticated, not draining, and has no command already inflight, the monitor issues a lightweight `api status` probe.
-- If liveness degrades again without recovery, the runtime closes the socket and falls into the normal disconnect/reconnect path.
+- On the first consecutive missed liveness check, the runtime moves to degraded and issues at most one lightweight `api status` probe for that idle episode, but only when authenticated, not draining, and with no other command already inflight.
+- On the second consecutive missed liveness check without observed recovery, the runtime moves to dead, closes the socket, and falls into the normal disconnect/reconnect path.
+- Any inbound frame or successful probe reply restores `Live` and clears the miss counter.
 
 This is enough to expose deterministic liveness transitions in health snapshots and to trigger recovery when a connection goes silent. It is not yet a broader heartbeat orchestration layer.
 

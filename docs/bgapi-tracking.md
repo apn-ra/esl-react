@@ -92,7 +92,7 @@ Accepted `bgapi` jobs survive unexpected supervised reconnect. When the connecti
 - Their promises remain open.
 - `BgapiJobTracker` retains all pending job UUIDs.
 
-If FreeSWITCH was processing the job before the disconnect, it may still emit the `BACKGROUND_JOB` completion event after the ESL connection is reestablished. When that event arrives on the new connection, `BgapiCompletionMatcher` matches it by UUID and resolves the handle's promise normally.
+If FreeSWITCH was processing the job before the disconnect, it may still emit the `BACKGROUND_JOB` completion event after the ESL connection is reestablished. When that event arrives on the new connection, the runtime matches it by UUID through `BgapiJobTracker` and resolves the handle's promise normally.
 
 If FreeSWITCH also lost the job during the restart, no completion will ever arrive, and the job will time out via `bgapiOrphanTimeoutSeconds`.
 
@@ -101,7 +101,7 @@ Reconnect itself does NOT resolve bgapi handles. Only a valid later completion c
 Explicit `disconnect()` is different:
 
 - The runtime treats it as terminal shutdown.
-- Pending bgapi jobs are rejected with `ConnectionLostException`.
+- Pending bgapi jobs are rejected with `DrainException`.
 - No later completion is applied to those terminalized handles.
 
 ---
@@ -131,7 +131,7 @@ $handle->promise()->then(
     function (\Throwable $e) {
         if ($e instanceof \Apntalk\EslReact\Exceptions\CommandTimeoutException) {
             echo "Job timed out.\n";
-        } elseif ($e instanceof \Apntalk\EslReact\Exceptions\ConnectionLostException) {
+        } elseif ($e instanceof \Apntalk\EslReact\Exceptions\DrainException) {
             echo "Runtime shut down before job completion.\n";
         }
     }

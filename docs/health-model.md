@@ -47,7 +47,7 @@ Implemented meaning in the current slice:
 - `true` when inbound traffic or a heartbeat probe response has kept the connection inside the configured liveness window
 - `false` when the connection has gone idle long enough to degrade liveness, or when the runtime is disconnected/recovering
 
-`false` does not immediately mean the socket has closed. During the first missed liveness window, `ConnectionState` may still be `Authenticated` while `isLive` is `false`.
+`false` does not immediately mean the socket has closed. During the first missed liveness window, `ConnectionState` may still be `Authenticated` while `isLive` is `false`. In the current model, one missed check degrades liveness and may trigger a probe; the second consecutive missed check closes the socket.
 
 ---
 
@@ -57,7 +57,7 @@ Type: `int`
 
 The number of `api` commands currently awaiting a reply from FreeSWITCH. Because `api` commands are serial, this value is either 0 or 1 in normal operation. A value greater than 1 indicates commands are queued in the `AsyncCommandBus` waiting for the current inflight command to complete.
 
-This is also the value tracked by `BackpressureController` when enforcing `BackpressureConfig::$maxInflightCommands`.
+This is also the runtime-wide accepted-work value used when enforcing `BackpressureConfig::$maxInflightCommands`.
 
 ---
 
@@ -65,7 +65,36 @@ This is also the value tracked by `BackpressureController` when enforcing `Backp
 
 Type: `int`
 
-The number of `bgapi` jobs that have been dispatched and are awaiting their `BACKGROUND_JOB` completion event. This count includes jobs that have survived a reconnect and are still waiting for their completion.
+The number of accepted `bgapi` handles that have not yet reached a terminal outcome. This includes:
+
+- handles still waiting for the bgapi acceptance reply
+- accepted jobs waiting for `BACKGROUND_JOB`
+- jobs that have survived an unexpected reconnect and are still pending
+
+---
+
+### totalInflightCount
+
+Type: `int`
+
+The runtime-wide accepted-work count used by overload and drain decisions.
+
+Current definition:
+
+- `inflightCommandCount`
+- plus `pendingBgapiJobCount`
+
+This is the number that `BackpressureConfig::$maxInflightCommands` is compared against.
+
+---
+
+### isOverloaded
+
+Type: `bool`
+
+Whether the runtime would currently reject new work for backpressure reasons.
+
+When `true`, new `api()`, `bgapi()`, and live-session subscription/filter mutations are rejected with `BackpressureException`.
 
 ---
 
@@ -90,6 +119,8 @@ The number of reconnect attempts made since the last successful authenticated co
 Type: `bool`
 
 Whether the runtime is currently in drain mode. `true` when `ConnectionState` is `Draining`. In this state, new commands are rejected and the runtime is closing explicitly rather than recovering.
+Accepted inflight work may still be present while this flag is true.
+Once the runtime finishes closing and `ConnectionState` becomes `Closed`, this flag returns to `false`.
 
 ---
 
@@ -132,7 +163,8 @@ Unix timestamp in microseconds when the most recent inbound activity was recorde
 | connectionState | isLive | Meaning |
 |---|---|---|
 | `Authenticated` | `true` | Fully operational |
-| `Authenticated` | `false` | Connected but liveness degraded; a probe may be in progress |
+| `Authenticated` | `false` | Connected but liveness degraded; one probe may be in progress for the current idle episode |
+| `Draining` | `true` or `false` | Explicit terminal shutdown path; new work is rejected |
 | `Reconnecting` | `false` | Disconnected, waiting for the next retry attempt |
 | `Connecting` | `false` | Retry timer has fired and a new socket attempt is underway |
 | `Disconnected` | `false` | Not connected, no retry pending |
@@ -159,9 +191,11 @@ if ($snapshot->isDraining) {
 }
 
 echo sprintf(
-    "inflight=%d pending_bgapi=%d reconnects=%d",
+    "inflight=%d api=%d bgapi=%d overloaded=%s reconnects=%d",
+    $snapshot->totalInflightCount,
     $snapshot->inflightCommandCount,
     $snapshot->pendingBgapiJobCount,
+    $snapshot->isOverloaded ? 'yes' : 'no',
     $snapshot->reconnectAttempts,
 );
 ```
