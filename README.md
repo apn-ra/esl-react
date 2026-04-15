@@ -406,6 +406,21 @@ vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeManualReconnectApi
 
 This harness follows the same manual disruption flow, then waits for a post-reconnect event and issues one safe read-only `api()` command (`status` by default) after recovery. It proves that the active command path is alive again without automating any network change.
 
+For staging/lab-only manual reconnect proof that also verifies the async job path after recovery, an additional opt-in harness is available:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_MANUAL_RECONNECT_BGAPI_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_EVENT_NAME=HEARTBEAT \
+ESL_REACT_LIVE_POST_RECONNECT_BGAPI_COMMAND=status \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeManualReconnectBgapiRecoveryTest.php
+```
+
+This harness follows the same manual disruption flow, restores both the normal event subscription and `BACKGROUND_JOB`, then issues one low-risk `bgapi()` command (`status` by default) after reconnect. It verifies real ack/Job-UUID acquisition, real `BACKGROUND_JOB` completion, and clean shutdown without automating any network change.
+
 ---
 
 ## License
