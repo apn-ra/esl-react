@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "1b59eb4367748510eb29fedeb970db6f",
+    "content-hash": "18f850730cf1e17b02550fe1acb7d52d",
     "packages": [
         {
             "name": "apntalk/esl-core",
@@ -4562,7 +4562,7 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": "^8.1"
+        "php": "^8.3"
     },
     "platform-dev": {},
     "plugin-api-version": "2.9.0"

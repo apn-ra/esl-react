@@ -6,8 +6,8 @@ This package turns `apntalk/esl-core` into a usable long-lived async runtime: it
 
 Current implementation status:
 
-- Implemented and test-covered in this pass: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
-- Implemented and contract-stabilized in this pass: replay-safe runtime hook emission for supported runtime paths.
+- Implemented and test-covered: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
+- Implemented and contract-stabilized: replay-safe runtime hook emission for supported runtime paths.
 - Present but still minimal relative to the plan: heartbeat orchestration beyond the current liveness probe and recover-on-silence behavior.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
@@ -50,7 +50,7 @@ These concerns belong to `apntalk/laravel-freeswitch-esl` or application code.
 
 ## Requirements
 
-- PHP 8.1 or higher
+- PHP 8.3 or higher
 - `react/event-loop` ^1.5
 - `react/promise` ^3.2
 - `react/socket` ^1.16
@@ -63,11 +63,6 @@ These concerns belong to `apntalk/laravel-freeswitch-esl` or application code.
 ```bash
 composer require apntalk/esl-react
 ```
-
-Repository-local development note:
-
-- The publishable dependency intent remains `apntalk/esl-core ^0.2`.
-- For sibling-repo workspace installs, this repository uses a Composer `path` repository with a local version override for `../esl-core` so development stays practical without publishing a misleading `dev-main as ...` dependency requirement.
 
 ---
 
@@ -333,6 +328,40 @@ Consumers should import only stable public types. See [docs/stability-policy.md]
 - [BGAPI tracking](docs/bgapi-tracking.md)
 - [Replay hooks](docs/replay-hooks.md)
 - [Stability policy](docs/stability-policy.md)
+
+---
+
+## Live compatibility harness
+
+The default test suite uses a deterministic fake ESL server and does not require a live PBX.
+
+For opt-in package-owned realism checks, `tests/Integration/LiveRuntimeCompatibilityTest.php` can connect `apntalk/esl-react` itself to a real FreeSWITCH inbound ESL target:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeCompatibilityTest.php
+```
+
+The live harness verifies direct connect/auth, one read-only `api()` command (`status` by default), and clean shutdown. It is skipped unless explicitly enabled and is not a replacement for the deterministic fake-server suite.
+
+For local development, you may place these variables in an untracked `.env.live.local` or `.env.testing.local` file. PHPUnit loads only `ESL_REACT_LIVE_*` keys from those files via `tests/bootstrap.php`; already-exported shell variables take precedence. Use `.env.live.example` as a placeholder template and keep real credentials local.
+
+An additional opt-in live event receipt harness is available when a safe event source is expected:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_EVENT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_EVENT_NAME=HEARTBEAT \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeEventCompatibilityTest.php
+```
+
+The event harness subscribes through the public subscription API and observes the event through the public raw event stream. It defaults to observing a natural `HEARTBEAT` event and may wait up to `ESL_REACT_LIVE_EVENT_TIMEOUT` seconds (`25` by default). If your environment requires a harmless trigger command, set `ESL_REACT_LIVE_EVENT_TRIGGER_API` explicitly.
 
 ---
 

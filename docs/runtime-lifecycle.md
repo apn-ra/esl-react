@@ -1,6 +1,6 @@
 # Runtime lifecycle
 
-Status note: the connect/auth state transitions, unexpected-disconnect reconnect flow, desired subscription/filter restoration, bounded drain completion, and observational replay-hook emission documented here are implemented in this pass. Heartbeat remains intentionally minimal, but its degrade/probe/dead behavior is now explicit and regression-tested.
+Status note: the connect/auth state transitions, unexpected-disconnect reconnect flow, desired subscription/filter restoration, bounded drain completion, and observational replay-hook emission documented here are implemented and test-covered. Heartbeat remains intentionally minimal, but its degrade/probe/dead behavior is explicit and regression-tested.
 
 Hardening note for the implemented slice:
 

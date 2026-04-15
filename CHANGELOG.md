@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Release-oriented smoke test covering the documented happy path: public runtime construction, startup subscription/filter seeding, connect/auth, one successful `api()` call, one delivered event, and clean shutdown
+- Bounded chaos integration coverage for controlled runtime reactions to unexpected disconnect, post-success malformed traffic, and replay-sink failure during reconnect-era traffic
+- Phased hardening coverage for protocol edges, reconnect lifecycle stress, burst/backpressure correctness, and short soak-style runtime confidence
+- Opt-in direct live FreeSWITCH compatibility harness for package-owned connect/auth, `api()`, and clean-shutdown verification
+- Opt-in direct live FreeSWITCH event receipt harness for package-owned subscription and public event-stream verification
+- Test-bootstrap-only `.env.live.local` / `.env.testing.local` loading for local opt-in live harness variables without overriding shell-provided env
 - Executable runtime entry point via `AsyncEslRuntime::make()`
 - Concrete connect/auth lifecycle implementation with ReactPHP socket wiring
 - Deterministic fake ESL server for connect/auth and basic `api()` integration coverage
@@ -26,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Focused integration coverage for configured startup subscription/filter seeding, reconnect-era restore from seeded desired state, event bursts, partial-frame event parsing, and replay-sink failure across reconnect continuity
 
 ### Changed
+- Package metadata and CI now align with the actual supported PHP floor (`^8.3`) inherited from the current `apntalk/esl-core` line
+- README install/requirements notes now describe the public package truth only and no longer imply unpublished local path-repository behavior
 - `AsyncEslClientInterface` now explicitly declares `connect()`, matching the documented public contract
 - Local workspace dependency handling now keeps the publishable requirement at `apntalk/esl-core ^0.2` while using a path-repository version override for sibling-repo installs
 - `connect()`/`api()`/`disconnect()` failure semantics are now hardened and covered for timeout, malformed-handshake, invalid-state, and inflight-disconnect paths

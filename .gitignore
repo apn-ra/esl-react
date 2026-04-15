@@ -8,6 +8,7 @@
 .idea/
 .codex
 .env
+.env*.local
 *.log
 auth.json
 CLAUDE.md

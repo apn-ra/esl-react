@@ -1,6 +1,6 @@
 {
     "name": "apntalk/esl-react",
-    "description": "ReactPHP-native inbound FreeSWITCH ESL runtime for PHP — async connection management, command dispatch, event streaming, and reconnect supervision",
+    "description": "ReactPHP-native inbound FreeSWITCH ESL runtime for PHP — async connection management, command dispatch, event streaming, health, and reconnect supervision",
     "type": "library",
     "license": "MIT",
     "keywords": [
@@ -18,7 +18,7 @@
         }
     ],
     "require": {
-        "php": "^8.1",
+        "php": "^8.3",
         "apntalk/esl-core": "^0.2",
         "react/event-loop": "^1.5",
         "react/promise": "^3.2",
@@ -38,6 +38,11 @@
         "psr-4": {
             "Apntalk\\EslReact\\Tests\\": "tests/"
         }
+    },
+    "homepage": "https://github.com/apn-ra/esl-react",
+    "support": {
+        "issues": "https://github.com/apn-ra/esl-react/issues",
+        "source": "https://github.com/apn-ra/esl-react"
     },
     "scripts": {
         "test": "phpunit --no-coverage",
