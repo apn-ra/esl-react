@@ -363,6 +363,20 @@ vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeEventCompatibility
 
 The event harness subscribes through the public subscription API and observes the event through the public raw event stream. It defaults to observing a natural `HEARTBEAT` event and may wait up to `ESL_REACT_LIVE_EVENT_TIMEOUT` seconds (`25` by default). If your environment requires a harmless trigger command, set `ESL_REACT_LIVE_EVENT_TRIGGER_API` explicitly.
 
+An additional opt-in live `bgapi()` harness is available for one safe happy-path background job:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_BGAPI_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_BGAPI_COMMAND=status \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeBgapiCompatibilityTest.php
+```
+
+It verifies direct connect/auth, real `bgapi()` ack/job UUID acquisition, real completion, and clean shutdown. It is intentionally minimal and should use only low-risk commands.
+
 ---
 
 ## License

@@ -7,6 +7,16 @@ use PHPUnit\Framework\TestCase;
 
 final class LiveHarnessEnvLoaderTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->clearEnv('ESL_REACT_LIVE_HOST');
+        $this->clearEnv('ESL_REACT_LIVE_PASSWORD');
+        $this->clearEnv('ESL_REACT_LIVE_TEST');
+        $this->clearEnv('NOT_ESL_REACT_LIVE_VALUE');
+    }
+
     protected function tearDown(): void
     {
         $this->clearEnv('ESL_REACT_LIVE_HOST');
