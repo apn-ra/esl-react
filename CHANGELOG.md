@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Opt-in direct live FreeSWITCH compatibility harness for package-owned connect/auth, `api()`, and clean-shutdown verification
 - Opt-in direct live FreeSWITCH event receipt harness for package-owned subscription and public event-stream verification
 - Opt-in direct live FreeSWITCH `bgapi()` happy-path harness for package-owned ack/completion verification
+- Opt-in staging/lab manual live reconnect recovery harness for package-owned disconnect observation, reconnect recovery, desired-state restore, and post-reconnect event proof
 - Test-bootstrap-only `.env.live.local` / `.env.testing.local` loading for local opt-in live harness variables without overriding shell-provided env
 - Executable runtime entry point via `AsyncEslRuntime::make()`
 - Concrete connect/auth lifecycle implementation with ReactPHP socket wiring

@@ -377,6 +377,20 @@ vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeBgapiCompatibility
 
 It verifies direct connect/auth, real `bgapi()` ack/job UUID acquisition, real completion, and clean shutdown. It is intentionally minimal and should use only low-risk commands.
 
+For staging/lab-only manual reconnect recovery proof, an additional opt-in harness is available:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_MANUAL_RECONNECT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_EVENT_NAME=HEARTBEAT \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeManualReconnectRecoveryTest.php
+```
+
+This harness is intentionally manual. It connects, subscribes through the public API, prints operator instructions, waits for a real external connectivity disruption, then observes reconnect, desired-state recovery, one post-reconnect event, and clean shutdown. It does not automate network changes and should only be used in a staging/lab environment where manual disruption is approved.
+
 ---
 
 ## License
