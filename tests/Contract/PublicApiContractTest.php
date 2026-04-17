@@ -46,6 +46,11 @@ final class PublicApiContractTest extends TestCase
         self::assertSame(RuntimeLifecycleSnapshot::class, $returnType->getName());
     }
 
+    public function testRuntimeRunnerHandleExposesLifecycleChangeListenerMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'onLifecycleChange'));
+    }
+
     public function testAsyncEslRuntimeRunnerHasStableReturnType(): void
     {
         $method = new \ReflectionMethod(AsyncEslRuntime::class, 'runner');

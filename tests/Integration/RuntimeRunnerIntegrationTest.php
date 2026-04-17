@@ -24,6 +24,34 @@ use React\Socket\ConnectorInterface;
 
 final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 {
+    /**
+     * @return array{
+     *   runner: string,
+     *   connection: ?string,
+     *   session: ?string,
+     *   live: bool,
+     *   reconnecting: bool,
+     *   draining: bool,
+     *   stopped: bool,
+     *   failed: bool,
+     *   reconnectAttempts: int
+     * }
+     */
+    private function lifecycleMarker(RuntimeLifecycleSnapshot $snapshot): array
+    {
+        return [
+            'runner' => $snapshot->runnerState->value,
+            'connection' => $snapshot->connectionState()?->value,
+            'session' => $snapshot->sessionState()?->value,
+            'live' => $snapshot->isLive(),
+            'reconnecting' => $snapshot->isReconnecting(),
+            'draining' => $snapshot->isDraining(),
+            'stopped' => $snapshot->isStopped(),
+            'failed' => $snapshot->isFailed(),
+            'reconnectAttempts' => $snapshot->reconnectAttempts(),
+        ];
+    }
+
     public function testRunnerConsumesPreparedInputStartsRuntimeAndTransitionsToRunning(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -83,6 +111,118 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame(ConnectionState::Authenticated, $snapshot->connectionState);
         self::assertSame(SessionState::Active, $snapshot->sessionState);
         self::assertTrue($snapshot->isLive);
+
+        $server->close();
+    }
+
+    public function testRunnerLifecycleChangeListenerEmitsCurrentReconnectDrainAndStopSnapshots(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $this->loop->addTimer(0.05, function () use ($connection, $server): void {
+                $server->writeCommandReply($connection, '+OK accepted');
+            });
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.2),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        self::assertSame('starting', $markers[0]['runner']);
+        self::assertContains($markers[0]['connection'], ['disconnected', 'connecting']);
+        self::assertSame('not_started', $markers[0]['session']);
+
+        $this->await($handle->startupPromise());
+
+        $this->waitUntil(
+            function () use (&$markers): bool {
+                return array_filter(
+                    $markers,
+                    static fn (array $marker): bool => $marker['runner'] === 'running'
+                        && $marker['connection'] === 'authenticated'
+                        && $marker['session'] === 'active'
+                        && $marker['live'] === true
+                ) !== [];
+            },
+            0.2,
+        );
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            function () use (&$markers): bool {
+                return array_filter(
+                    $markers,
+                    static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                        && $marker['session'] === 'disconnected'
+                        && $marker['reconnecting'] === true
+                        && $marker['draining'] === false
+                ) !== [];
+            },
+            0.7,
+        );
+
+        $this->waitUntil(
+            function () use (&$markers): bool {
+                return count(array_filter(
+                    $markers,
+                    static fn (array $marker): bool => $marker['runner'] === 'running'
+                        && $marker['connection'] === 'authenticated'
+                        && $marker['session'] === 'active'
+                        && $marker['live'] === true
+                )) >= 2;
+            },
+            1.0,
+        );
+
+        $this->await($handle->client()->disconnect());
+
+        $this->waitUntil(
+            function () use (&$markers): bool {
+                return array_filter(
+                    $markers,
+                    static fn (array $marker): bool => $marker['connection'] === 'draining'
+                        && $marker['draining'] === true
+                        && $marker['reconnecting'] === false
+                        && $marker['stopped'] === false
+                ) !== [];
+            },
+            0.2,
+        );
+
+        $this->waitUntil(
+            function () use (&$markers): bool {
+                return array_filter(
+                    $markers,
+                    static fn (array $marker): bool => $marker['connection'] === 'closed'
+                        && $marker['session'] === 'disconnected'
+                        && $marker['draining'] === false
+                        && $marker['stopped'] === true
+                        && $marker['reconnecting'] === false
+                ) !== [];
+            },
+            0.2,
+        );
 
         $server->close();
     }
@@ -240,6 +380,11 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             $this->loop,
         );
 
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
         try {
             $this->await($handle->startupPromise());
             self::fail('Expected startup to fail');
@@ -257,6 +402,10 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame('invalid password', $lifecycle->startupErrorMessage);
         self::assertSame(ConnectionState::Disconnected, $lifecycle->connectionState());
         self::assertSame(SessionState::Failed, $lifecycle->sessionState());
+        self::assertSame('starting', $markers[0]['runner']);
+        self::assertSame('failed', $markers[array_key_last($markers)]['runner']);
+        self::assertTrue($markers[array_key_last($markers)]['failed']);
+        self::assertSame('failed', $markers[array_key_last($markers)]['session']);
 
         $server->close();
     }

@@ -127,6 +127,7 @@ Current runner truth:
 - The runner consumes `esl-react` owned prepared input and starts the live runtime immediately via `connect()`.
 - The coarse runner startup lifecycle is `starting -> running` or `starting -> failed`.
 - The returned handle exposes `lifecycleSnapshot()` as the preferred read-only higher-layer observation seam for startup state, connection/session health, liveness, reconnecting, drain, and failure truth.
+- The returned handle also exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Ongoing runtime lifecycle remains visible through the stable client health model (`ConnectionState`, `SessionState`, `HealthSnapshot`).
 - `PreparedRuntimeInput` preserves the config-driven path for simple adapters.
 - `PreparedRuntimeBootstrapInput` supports a richer handoff with a prepared ReactPHP `ConnectorInterface`, prepared `InboundPipelineInterface`, and runtime-local `RuntimeSessionContext`.
@@ -134,6 +135,13 @@ Current runner truth:
 - The prepared connector is used for live startup and reconnect attempts. This lets higher layers prepare transport access without making `esl-react` own their control plane.
 - The prepared pipeline is accepted and reset as part of the runner handoff lifecycle, but decoded-pipeline routing is not active yet. The current live protocol loop still uses the existing frame pump/router path.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and full replacement of the live ingress router with `InboundPipelineInterface` remain deferred.
+
+Lifecycle observer notes:
+
+- `onLifecycleChange()` invokes listeners immediately with the current `RuntimeLifecycleSnapshot`.
+- Later callbacks are emitted when coarse lifecycle truth changes, using the same snapshot shape as `lifecycleSnapshot()`.
+- Listener callbacks run synchronously in registration order, and listener exceptions are contained so they do not destabilize the runtime.
+- Explicit drain and unexpected transport-loss reconnect remain distinct on this surface: drain emits `Draining -> Closed`, while unexpected loss emits `Reconnecting` before any later recovery or exhaustion.
 
 Richer prepared-bootstrap example:
 

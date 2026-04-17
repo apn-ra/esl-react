@@ -34,6 +34,15 @@ ongoing lifecycle truth still comes from `ConnectionState`, `SessionState`, and
 `HealthSnapshot`; the lifecycle snapshot only packages that truth for consumers.
 This avoids creating a second competing control-plane model in `esl-react`.
 
+`RuntimeRunnerHandle::onLifecycleChange()` is the push-based companion to
+`lifecycleSnapshot()`. It emits the same `RuntimeLifecycleSnapshot` shape:
+
+- once immediately when a listener registers
+- again when coarse lifecycle truth changes
+
+This remains observational only. It does not add control hooks or define a
+second public state machine.
+
 For richer prepared-bootstrap inputs, the prepared connector participates in
 the normal `ConnectionState` transitions because it supplies the live connection
 for startup and reconnect attempts. The prepared ingress pipeline is reset as
@@ -42,6 +51,14 @@ live ingress path.
 When the richer input also implements the additive prepared dial-target
 contract, that same explicit dial URI is reused for both startup and reconnect
 attempts instead of forcing `RuntimeConfig::connectionUri()`.
+
+Observation note for shutdown and reconnect:
+
+- Explicit `disconnect()` emits `Draining` before the terminal `Closed` state.
+- Unexpected transport loss emits `Reconnecting` when supervision is active and
+  only later returns to `Authenticated` on recovery or to `Disconnected` if
+  retries are exhausted.
+- These remain distinct on both snapshot reads and pushed lifecycle callbacks.
 
 ---
 

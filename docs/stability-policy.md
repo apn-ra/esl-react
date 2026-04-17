@@ -71,6 +71,7 @@ The following behaviors are considered stable even when the implementing types a
 - Subscription restore after reconnect
 - `ConnectionLostException` on inflight api commands during unexpected transport loss
 - `DrainException` on accepted inflight work that is terminated by explicit bounded drain
+- `RuntimeRunnerHandle::onLifecycleChange()` immediate current-snapshot delivery and synchronous ordered callback semantics
 
 ---
 

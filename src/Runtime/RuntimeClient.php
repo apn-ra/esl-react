@@ -46,6 +46,8 @@ use function React\Promise\resolve;
 
 final class RuntimeClient implements AsyncEslClientInterface
 {
+    /** @var list<callable(): void> */
+    private array $lifecycleListeners = [];
     private ConnectionState $connectionState = ConnectionState::Disconnected;
     private SessionState $sessionState = SessionState::NotStarted;
     private LivenessState $livenessState = LivenessState::Dead;
@@ -89,6 +91,11 @@ final class RuntimeClient implements AsyncEslClientInterface
     public function attachHealthReporter(RuntimeHealthReporter $health): void
     {
         $this->health = $health;
+    }
+
+    public function onLifecycleChange(callable $listener): void
+    {
+        $this->lifecycleListeners[] = $listener;
     }
 
     public function connect(): PromiseInterface
@@ -207,6 +214,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
+            $this->notifyLifecycleChange();
             $this->settleConnectFailure(new ConnectionLostException('Disconnect requested before auth completed'));
 
             return $this->resolvedVoid();
@@ -221,6 +229,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
+            $this->notifyLifecycleChange();
             return $this->resolvedVoid();
         }
 
@@ -231,6 +240,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->heartbeat->stop();
         $this->commands->enterDrainMode();
         $this->connectionState = ConnectionState::Draining;
+        $this->notifyLifecycleChange();
         $this->disconnectDeferred = new Deferred();
         $this->startDrainTimers();
         $this->maybeFinalizeDrain();
@@ -306,6 +316,7 @@ final class RuntimeClient implements AsyncEslClientInterface
 
             $this->connectionState = ConnectionState::Authenticating;
             $this->sessionState = SessionState::Authenticating;
+            $this->notifyLifecycleChange();
             $this->outbound->dispatch(new AuthCommand($this->config->password));
         });
 
@@ -340,6 +351,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                     $this->connectionState = ConnectionState::Disconnected;
                     $this->sessionState = SessionState::Failed;
                     $this->livenessState = LivenessState::Dead;
+                    $this->notifyLifecycleChange();
                     $error = new AuthenticationException($reply->reason());
                     $this->recordError($error);
                     $this->settleConnectFailure($error);
@@ -378,6 +390,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
                 $this->livenessState = LivenessState::Dead;
+                $this->notifyLifecycleChange();
                 $this->recordError($error);
                 $this->cancelConnectTimeout();
                 $this->settleConnectFailure($error);
@@ -403,6 +416,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
                 $this->livenessState = LivenessState::Dead;
+                $this->notifyLifecycleChange();
                 $this->recordError($error);
                 $this->cancelConnectTimeout();
                 $this->settleConnectFailure($error);
@@ -422,6 +436,7 @@ final class RuntimeClient implements AsyncEslClientInterface
     {
         $this->heartbeat->onStateChange(function (LivenessState $newState): void {
             $this->livenessState = $newState;
+            $this->notifyLifecycleChange();
 
             if ($newState === LivenessState::Dead && $this->connection !== null && !$this->draining) {
                 $error = new ConnectionLostException('Heartbeat liveness window expired');
@@ -463,6 +478,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->connectionState = ConnectionState::Connected;
         $this->sessionState = SessionState::NotStarted;
         $this->livenessState = LivenessState::Degraded;
+        $this->notifyLifecycleChange();
         $this->outbound->attach($connection);
         $this->envelopePump->attach($connection);
 
@@ -489,6 +505,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->sessionState = SessionState::Disconnected;
         }
         $this->livenessState = LivenessState::Dead;
+        $this->notifyLifecycleChange();
         $disconnectReason = $reason ?? new ConnectionLostException();
         if ($this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason)) {
             $this->commands->onConnectionLost();
@@ -514,8 +531,9 @@ final class RuntimeClient implements AsyncEslClientInterface
             $disconnect->resolve(null);
         }
 
-        if ($this->connectionState === ConnectionState::Closed) {
+        if ($this->connectionState === ConnectionState::Closed && $this->draining) {
             $this->draining = false;
+            $this->notifyLifecycleChange();
         }
 
         $this->suppressReconnectOnNextClose = false;
@@ -526,11 +544,13 @@ final class RuntimeClient implements AsyncEslClientInterface
         $connect = $this->connectDeferred;
         $this->connectDeferred = null;
         $connect?->reject($e);
+        $this->notifyLifecycleChange();
     }
 
     private function recordError(\Throwable $e): void
     {
         $this->health?->recordError($e);
+        $this->notifyLifecycleChange();
     }
 
     private function startConnectTimeout(): void
@@ -558,6 +578,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->connectionState = ConnectionState::Disconnected;
             $this->sessionState = SessionState::Failed;
             $this->livenessState = LivenessState::Dead;
+            $this->notifyLifecycleChange();
             $this->recordError($error);
             $this->supervisionEnabled = false;
             $this->suppressReconnectOnNextClose = true;
@@ -597,6 +618,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->connectionState = ConnectionState::Connecting;
         $this->sessionState = SessionState::NotStarted;
         $this->livenessState = LivenessState::Dead;
+        $this->notifyLifecycleChange();
         $this->cancelConnectTimeout();
         $this->startConnectTimeout();
         $this->connector->connect($this->connectionUri)->then(
@@ -617,6 +639,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 );
                 $this->recordError($error);
                 $this->livenessState = LivenessState::Dead;
+                $this->notifyLifecycleChange();
 
                 if ($this->shouldScheduleReconnect($error)) {
                     $this->scheduleReconnect($error);
@@ -625,6 +648,7 @@ final class RuntimeClient implements AsyncEslClientInterface
 
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
+                $this->notifyLifecycleChange();
                 $this->settleConnectFailure($error);
             },
         );
@@ -651,6 +675,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->sessionState = SessionState::Disconnected;
             }
             $this->livenessState = LivenessState::Dead;
+            $this->notifyLifecycleChange();
             $this->settleConnectFailure($reason);
             return;
         }
@@ -660,6 +685,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->sessionState = SessionState::Disconnected;
         }
         $this->livenessState = LivenessState::Dead;
+        $this->notifyLifecycleChange();
         $this->reconnectScheduled = true;
         $this->reconnects->scheduleNext(function (): void {
             $this->reconnectScheduled = false;
@@ -673,6 +699,7 @@ final class RuntimeClient implements AsyncEslClientInterface
 
         if (!$this->reconnectScheduled && $this->config->retryPolicy->hasExhausted($this->reconnects->attempts())) {
             $this->connectionState = ConnectionState::Disconnected;
+            $this->notifyLifecycleChange();
             $this->settleConnectFailure($reason);
         }
     }
@@ -704,6 +731,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->heartbeat->recordActivity();
         $this->heartbeat->start();
         $this->livenessState = $this->heartbeat->state();
+        $this->notifyLifecycleChange();
     }
 
     private function assertCanAcceptNewWork(): void
@@ -792,6 +820,20 @@ final class RuntimeClient implements AsyncEslClientInterface
         if ($this->drainPollTimer !== null) {
             $this->loop->cancelTimer($this->drainPollTimer);
             $this->drainPollTimer = null;
+        }
+    }
+
+    private function notifyLifecycleChange(): void
+    {
+        foreach ($this->lifecycleListeners as $listener) {
+            try {
+                $listener();
+            } catch (\Throwable $e) {
+                fwrite(STDERR, sprintf(
+                    "[esl-react] Runtime lifecycle listener exception: %s\n",
+                    $e->getMessage(),
+                ));
+            }
         }
     }
 }

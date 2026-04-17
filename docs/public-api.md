@@ -150,6 +150,7 @@ Current runner notes:
 - `run()` starts the live runtime immediately by delegating to the existing `connect()` path.
 - The returned handle exposes `startupPromise()` plus a coarse startup state model.
 - The returned handle exposes `lifecycleSnapshot()` for higher layers that need read-only startup + live runtime observation without taking runtime ownership.
+- The returned handle exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
 - Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
 - `PreparedRuntimeDialTargetInputInterface` additively allows richer prepared-bootstrap inputs to override the dial target URI used by the prepared connector for startup and reconnect attempts.
@@ -190,6 +191,10 @@ Helper methods expose coarse truth for downstream packages:
 | `lastRuntimeErrorClass()` / `lastRuntimeErrorMessage()` | Last runtime error recorded by health |
 
 This is an observation surface only. It does not start, stop, reconnect, or supervise the runtime.
+
+`RuntimeRunnerHandle::onLifecycleChange()` reuses this same snapshot type for
+push-based lifecycle observation. It does not introduce a second public state
+machine or a separate lifecycle event taxonomy.
 
 ### RuntimeRunnerInputInterface
 
@@ -396,6 +401,15 @@ Apntalk\EslReact\Runner\RuntimeRunnerHandle
 | `state()` | `RuntimeRunnerState` | Coarse startup lifecycle state |
 | `startupError()` | `?\Throwable` | Startup failure if the initial connect/auth path failed |
 | `sessionContext()` | `?RuntimeSessionContext` | Runtime-local session context when startup used a prepared-bootstrap input |
+| `lifecycleSnapshot()` | `RuntimeLifecycleSnapshot` | Read-only packaged runner + health lifecycle snapshot |
+| `onLifecycleChange(callable $listener)` | `void` | Register a synchronous lifecycle listener receiving `RuntimeLifecycleSnapshot` values |
+
+`onLifecycleChange()` notes:
+
+- The listener is invoked immediately with the current `RuntimeLifecycleSnapshot`.
+- Later callbacks are emitted when coarse lifecycle truth changes on the runtime or runner startup state.
+- Listener callbacks run synchronously in registration order.
+- Listener exceptions are contained and written to stderr; they do not crash the runtime or block later listeners.
 
 ### RuntimeRunnerState
 
