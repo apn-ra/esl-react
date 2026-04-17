@@ -486,6 +486,36 @@ vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerReconnectCom
 
 This harness runs the public runner seam, subscribes through the public API, executes the configured disrupt/restore commands, and asserts that snapshot plus push-based lifecycle observation surfaces report unexpected transport loss as reconnecting rather than draining before later recovery to authenticated/live truth. This reconnect path has been exercised successfully against a real FreeSWITCH target in an opt-in lab environment. It remains intentionally opt-in and requires target-specific commands that are safe, bounded, and idempotent in your lab environment.
 
+An additional opt-in live runner bgapi/event harness is available when a safe
+event source and one low-risk background job command are available:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_BGAPI_EVENT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_RUNNER_BGAPI_EVENT_NAME=HEARTBEAT \
+ESL_REACT_LIVE_RUNNER_BGAPI_COMMAND=status \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerBgapiEventCompatibilityTest.php
+```
+
+This harness starts through the public runner seam, subscribes to the configured
+event and `BACKGROUND_JOB`, observes one live event through the public raw
+event stream, runs one safe `bgapi()` command, waits for its real ack and
+completion, and asserts that snapshot plus push-based lifecycle observation
+remain `Authenticated`/`Active`/live without false reconnect, drain, closed, or
+failed markers during the activity. It has been exercised successfully against
+a real FreeSWITCH target in an opt-in lab environment.
+
+Combined-condition runner coverage is deterministic in this checkpoint: the
+fake-server suite now covers pending `bgapi()` plus desired event subscriptions
+through unexpected reconnect, and pending `bgapi()` while heartbeat liveness
+degrades and recovers. Those tests assert no false drain, fail-closed new work
+while reconnecting, restored event flow after reconnect, and matching snapshot
+plus pushed lifecycle truth. Live combined-condition fault injection remains a
+later opt-in lab milestone.
+
 An additional opt-in live event receipt harness is available when a safe event source is expected:
 
 ```bash

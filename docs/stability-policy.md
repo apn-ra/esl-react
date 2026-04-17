@@ -73,6 +73,8 @@ The following behaviors are considered stable even when the implementing types a
 - `DrainException` on accepted inflight work that is terminated by explicit bounded drain
 - `RuntimeRunnerHandle::onLifecycleChange()` immediate current-snapshot delivery and synchronous ordered callback semantics
 - Live package-owned validation for runner startup and explicit drain-to-stop observation, plus live-verified opt-in automated reconnect recovery validation when safe disruption/restore commands are supplied by the environment
+- Deterministic and opt-in live runner-surface validation for event subscription plus `bgapi()` completion activity against real FreeSWITCH event and `BACKGROUND_JOB` traffic
+- Deterministic runner-surface validation for combined pending `bgapi()` plus event-subscription behavior during degraded liveness and reconnecting runtime states
 - Deterministic runner-surface validation for heartbeat/liveness degradation and recovery, with optional live lab validation on quiet targets
 - Deterministic runner-surface validation for the second-miss heartbeat dead/reconnect path, with optional live lab validation when the target can be made silent without immediate transport loss
 

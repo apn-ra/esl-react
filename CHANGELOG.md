@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-04-17
+
+### Added
+- Opt-in live runner bgapi/event harness for validating public runner lifecycle truth while receiving one real FreeSWITCH event and completing one safe `bgapi()` job
+- Deterministic runner-surface coverage for pending `bgapi()` plus desired event subscriptions across unexpected reconnect, including fail-closed new work while reconnecting, restored event flow, and post-reconnect `BACKGROUND_JOB` completion
+- Deterministic runner-surface coverage for pending `bgapi()` while heartbeat liveness degrades and recovers without false reconnect or drain observation
+
+### Changed
+- Public runner docs now distinguish healthy live bgapi/event validation from deterministic combined-condition validation, and explicitly defer live combined-condition fault injection
+- Runtime lifecycle docs now clarify that pending bgapi/event combined conditions keep degraded-not-live and reconnect states distinct from explicit drain
+
 ## [0.2.4] - 2026-04-17
 
 ### Added

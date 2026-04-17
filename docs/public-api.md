@@ -153,6 +153,8 @@ Current runner notes:
 - The returned handle exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Package-owned live harnesses cover the runner handle startup and explicit drain-to-stop observation path on a real FreeSWITCH target.
 - Package-owned live harnesses now cover unexpected transport-loss reconnect and recovery on the runner seam in opt-in lab environments that provide safe disruption and restore commands.
+- Package-owned deterministic runner tests cover event subscription plus `bgapi()` completion activity while lifecycle snapshots and pushed markers remain authenticated/live, and an opt-in live harness has validated the same runner-surface truth against real FreeSWITCH event and background-job traffic.
+- Package-owned deterministic runner tests cover combined conditions where pending `bgapi()` and desired event subscriptions intersect with degraded liveness or reconnecting runtime states. Live combined-condition fault injection remains intentionally deferred.
 - Package-owned deterministic runner tests now cover heartbeat/liveness degradation and recovery on the same snapshot/push observation surface, and an opt-in live harness can validate the same path on a quiet target.
 - Package-owned deterministic runner tests also cover the second-miss heartbeat dead/reconnect path, and a separate opt-in live harness can validate that deeper path when the lab can make the target go silent without immediately closing the connection.
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.

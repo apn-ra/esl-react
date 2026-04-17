@@ -3,13 +3,17 @@
 namespace Apntalk\EslReact\Tests\Integration;
 
 use Apntalk\EslCore\Inbound\InboundPipeline;
+use Apntalk\EslCore\Correlation\EventEnvelope;
+use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslCore\Replies\ApiReply;
 use Apntalk\EslReact\AsyncEslRuntime;
+use Apntalk\EslReact\Bgapi\BgapiJobHandle;
 use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Config\HeartbeatConfig;
 use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
+use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
@@ -19,6 +23,7 @@ use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
 use React\EventLoop\LoopInterface;
+use React\Promise\Deferred;
 use React\Socket\Connector;
 use React\Socket\ConnectorInterface;
 
@@ -472,6 +477,381 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertFalse($closed->isDraining());
         self::assertTrue($closed->isStopped());
 
+        $server->close();
+    }
+
+    public function testRunnerLifecycleObservationRemainsTruthfulDuringEventAndBgapiActivity(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain CHANNEL_CREATE BACKGROUND_JOB', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('bgapi status', $command);
+            $server->writeBgapiAcceptedReply($connection, 'runner-bgapi-job-1');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+
+        $eventDeferred = new Deferred();
+        $handle->client()->events()->onRawEnvelope(
+            function (EventEnvelope $envelope) use ($eventDeferred): void {
+                if ($envelope->event()->eventName() === 'CHANNEL_CREATE') {
+                    $eventDeferred->resolve($envelope);
+                }
+            },
+        );
+
+        $this->await($handle->client()->subscriptions()->subscribe('CHANNEL_CREATE', 'BACKGROUND_JOB'));
+
+        $server->emitPlainEvent([
+            'Event-Name' => 'CHANNEL_CREATE',
+            'Event-Sequence' => '501',
+            'Unique-ID' => 'runner-event-1',
+            'Channel-Name' => 'sofia/internal/runner-event',
+        ]);
+
+        $envelope = $this->await($eventDeferred->promise(), 0.2);
+        self::assertInstanceOf(EventEnvelope::class, $envelope);
+        self::assertSame('CHANNEL_CREATE', $envelope->event()->eventName());
+        self::assertSame('501', $envelope->metadata()->protocolSequence());
+
+        $job = $handle->client()->bgapi('status');
+        self::assertInstanceOf(BgapiJobHandle::class, $job);
+        self::assertSame('status', $job->eslCommand());
+        self::assertSame('', $job->eslArgs());
+
+        $this->waitUntil(
+            fn (): bool => $job->jobUuid() === 'runner-bgapi-job-1'
+                && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
+            0.2,
+        );
+
+        $duringBgapi = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $duringBgapi->runnerState);
+        self::assertSame(ConnectionState::Authenticated, $duringBgapi->connectionState());
+        self::assertSame(SessionState::Active, $duringBgapi->sessionState());
+        self::assertTrue($duringBgapi->isLive());
+        self::assertFalse($duringBgapi->isReconnecting());
+        self::assertFalse($duringBgapi->isDraining());
+        self::assertFalse($duringBgapi->isStopped());
+        self::assertSame(['CHANNEL_CREATE', 'BACKGROUND_JOB'], $duringBgapi->health?->activeSubscriptions);
+
+        $server->emitBackgroundJobEvent('runner-bgapi-job-1', "+OK runner bgapi complete\n", 'status');
+
+        $completion = $this->await($job->promise(), 0.2);
+        self::assertInstanceOf(BackgroundJobEvent::class, $completion);
+        self::assertSame('runner-bgapi-job-1', $completion->jobUuid());
+        self::assertSame("+OK runner bgapi complete\n", $completion->result());
+
+        $afterActivity = $handle->lifecycleSnapshot();
+        self::assertSame(ConnectionState::Authenticated, $afterActivity->connectionState());
+        self::assertSame(SessionState::Active, $afterActivity->sessionState());
+        self::assertTrue($afterActivity->isLive());
+        self::assertFalse($afterActivity->isReconnecting());
+        self::assertFalse($afterActivity->isDraining());
+        self::assertFalse($afterActivity->isStopped());
+        self::assertSame(0, $afterActivity->health?->pendingBgapiJobCount);
+
+        self::assertSame([], array_filter(
+            $markers,
+            static fn (array $marker): bool => $marker['reconnecting'] === true
+                || $marker['connection'] === 'reconnecting'
+                || $marker['draining'] === true
+                || $marker['connection'] === 'draining'
+                || $marker['stopped'] === true
+        ));
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
+    public function testRunnerRetainsPendingBgapiAndRestoresEventFlowAcrossUnexpectedReconnect(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain CHANNEL_CREATE BACKGROUND_JOB', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('bgapi status', $command);
+            $server->writeBgapiAcceptedReply($connection, 'runner-bgapi-reconnect-job');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+        $this->await($handle->client()->subscriptions()->subscribe('CHANNEL_CREATE', 'BACKGROUND_JOB'));
+
+        $eventDeferred = new Deferred();
+        $handle->client()->events()->onRawEnvelope(
+            function (EventEnvelope $envelope) use ($eventDeferred): void {
+                if ($envelope->event()->eventName() === 'CHANNEL_CREATE') {
+                    $eventDeferred->resolve($envelope);
+                }
+            },
+        );
+
+        $job = $handle->client()->bgapi('status');
+        $this->waitUntil(
+            fn (): bool => $job->jobUuid() === 'runner-bgapi-reconnect-job'
+                && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
+            0.2,
+        );
+
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain CHANNEL_CREATE BACKGROUND_JOB', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                $snapshot = $handle->lifecycleSnapshot();
+
+                return $snapshot->connectionState() === ConnectionState::Reconnecting
+                    && $snapshot->sessionState() === SessionState::Disconnected
+                    && $snapshot->health?->pendingBgapiJobCount === 1
+                    && array_filter(
+                        $markers,
+                        static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                            && $marker['session'] === 'disconnected'
+                            && $marker['reconnecting'] === true
+                            && $marker['draining'] === false
+                    ) !== [];
+            },
+            0.2,
+        );
+
+        $reconnecting = $handle->lifecycleSnapshot();
+        self::assertFalse($reconnecting->isLive());
+        self::assertTrue($reconnecting->isReconnecting());
+        self::assertFalse($reconnecting->isDraining());
+        self::assertFalse($reconnecting->isStopped());
+        self::assertSame(1, $reconnecting->health?->pendingBgapiJobCount);
+
+        try {
+            $handle->client()->bgapi('status');
+            self::fail('Expected new bgapi work to fail closed while reconnecting');
+        } catch (ConnectionException $e) {
+            self::assertSame('Runtime is not authenticated', $e->getMessage());
+        }
+
+        try {
+            $handle->client()->subscriptions()->subscribe('CHANNEL_ANSWER');
+            self::fail('Expected subscription mutation to fail closed while reconnecting');
+        } catch (ConnectionException $e) {
+            self::assertSame('Runtime is not authenticated', $e->getMessage());
+        }
+
+        $this->waitUntil(
+            fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+                && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
+                && $handle->lifecycleSnapshot()->isLive()
+                && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1
+                && $handle->lifecycleSnapshot()->health?->activeSubscriptions === ['CHANNEL_CREATE', 'BACKGROUND_JOB'],
+            0.5,
+        );
+
+        $server->emitPlainEvent([
+            'Event-Name' => 'CHANNEL_CREATE',
+            'Event-Sequence' => '601',
+            'Unique-ID' => 'runner-reconnect-event-1',
+        ]);
+        $server->emitBackgroundJobEvent('runner-bgapi-reconnect-job', "+OK runner bgapi recovered\n", 'status');
+
+        $event = $this->await($eventDeferred->promise(), 0.2);
+        self::assertInstanceOf(EventEnvelope::class, $event);
+        self::assertSame('CHANNEL_CREATE', $event->event()->eventName());
+        self::assertSame('601', $event->metadata()->protocolSequence());
+
+        $completion = $this->await($job->promise(), 0.2);
+        self::assertInstanceOf(BackgroundJobEvent::class, $completion);
+        self::assertSame('runner-bgapi-reconnect-job', $completion->jobUuid());
+        self::assertSame("+OK runner bgapi recovered\n", $completion->result());
+
+        $recovered = $handle->lifecycleSnapshot();
+        self::assertSame(ConnectionState::Authenticated, $recovered->connectionState());
+        self::assertSame(SessionState::Active, $recovered->sessionState());
+        self::assertTrue($recovered->isLive());
+        self::assertFalse($recovered->isReconnecting());
+        self::assertFalse($recovered->isDraining());
+        self::assertFalse($recovered->isStopped());
+        self::assertSame(0, $recovered->health?->pendingBgapiJobCount);
+
+        self::assertSame([], array_filter(
+            $markers,
+            static fn (array $marker): bool => $marker['draining'] === true
+                || $marker['connection'] === 'draining'
+        ));
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
+    public function testRunnerKeepsPendingBgapiTruthWhileHeartbeatDegradesAndRecovers(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain BACKGROUND_JOB', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('bgapi status', $command);
+            $server->writeBgapiAcceptedReply($connection, 'runner-bgapi-degraded-job');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $this->loop->addTimer(0.03, function () use ($connection, $server): void {
+                $server->writeApiResponse($connection, "+OK liveness-recovered-with-bgapi\n");
+            });
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::disabled(),
+                    heartbeat: HeartbeatConfig::withInterval(0.05, 0.01),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+        $this->await($handle->client()->subscriptions()->subscribe('BACKGROUND_JOB'));
+
+        $job = $handle->client()->bgapi('status');
+        $this->waitUntil(
+            fn (): bool => $job->jobUuid() === 'runner-bgapi-degraded-job'
+                && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
+            0.2,
+        );
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                $snapshot = $handle->lifecycleSnapshot();
+
+                return $snapshot->connectionState() === ConnectionState::Authenticated
+                    && $snapshot->sessionState() === SessionState::Active
+                    && $snapshot->isLive() === false
+                    && $snapshot->health?->pendingBgapiJobCount === 1
+                    && array_filter(
+                        $markers,
+                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                            && $marker['session'] === 'active'
+                            && $marker['live'] === false
+                            && $marker['reconnecting'] === false
+                            && $marker['draining'] === false
+                    ) !== [];
+            },
+            0.2,
+        );
+
+        $degraded = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $degraded->runnerState);
+        self::assertSame(ConnectionState::Authenticated, $degraded->connectionState());
+        self::assertSame(SessionState::Active, $degraded->sessionState());
+        self::assertFalse($degraded->isLive());
+        self::assertFalse($degraded->isReconnecting());
+        self::assertFalse($degraded->isDraining());
+        self::assertFalse($degraded->isStopped());
+        self::assertSame(1, $degraded->health?->pendingBgapiJobCount);
+
+        $this->waitUntil(
+            fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+                && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
+                && $handle->lifecycleSnapshot()->isLive()
+                && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
+            0.3,
+        );
+
+        $server->emitBackgroundJobEvent('runner-bgapi-degraded-job', "+OK bgapi completed after liveness recovery\n", 'status');
+
+        $completion = $this->await($job->promise(), 0.2);
+        self::assertInstanceOf(BackgroundJobEvent::class, $completion);
+        self::assertSame('runner-bgapi-degraded-job', $completion->jobUuid());
+        self::assertSame("+OK bgapi completed after liveness recovery\n", $completion->result());
+
+        $recovered = $handle->lifecycleSnapshot();
+        self::assertSame(ConnectionState::Authenticated, $recovered->connectionState());
+        self::assertSame(SessionState::Active, $recovered->sessionState());
+        self::assertTrue($recovered->isLive());
+        self::assertFalse($recovered->isReconnecting());
+        self::assertFalse($recovered->isDraining());
+        self::assertFalse($recovered->isStopped());
+        self::assertSame(0, $recovered->health?->pendingBgapiJobCount);
+
+        self::assertSame([], array_filter(
+            $markers,
+            static fn (array $marker): bool => $marker['reconnecting'] === true
+                || $marker['connection'] === 'reconnecting'
+                || $marker['draining'] === true
+                || $marker['connection'] === 'draining'
+        ));
+
+        $this->await($handle->client()->disconnect());
         $server->close();
     }
 

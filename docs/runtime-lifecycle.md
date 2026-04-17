@@ -49,6 +49,18 @@ the final `Closed` state. Unexpected transport-loss reconnect recovery is also
 validated by an opt-in automated lab harness when the environment provides safe
 disruption and restore commands, alongside the existing manual live harnesses
 for staging paths where operator-driven disruption is still preferred.
+Event subscription plus `bgapi()` activity is regression-tested
+deterministically on the runner seam, and an opt-in live harness has validated
+the same path with real FreeSWITCH event and `BACKGROUND_JOB` traffic. During
+that activity, lifecycle snapshots and pushed callbacks are expected to remain
+`Authenticated`/`Active`/live and must not report reconnect, drain, closed, or
+failed states unless a real transport or runtime failure occurs.
+Combined conditions are covered deterministically on the runner seam: a pending
+`bgapi()` job can remain tracked while heartbeat liveness degrades and recovers,
+and pending `bgapi()` plus desired event subscriptions can survive unexpected
+reconnect before post-reconnect event and `BACKGROUND_JOB` traffic resolves the
+activity. During these paths, reconnect and degraded-not-live states remain
+distinct from explicit drain.
 Heartbeat/liveness degradation is regression-tested deterministically on the
 runner seam and can also be exercised by an opt-in live harness on relatively
 quiet targets, where the expected path is `Authenticated/live` ->
