@@ -15,6 +15,9 @@ context.
 For downstream health/reporting integration, `RuntimeRunnerHandle::feedbackSnapshot()`
 packages the same health truth with prepared runtime identity in one stable
 read model.
+For downstream runtime-status export, `RuntimeRunnerHandle::statusSnapshot()`
+packages that same health truth with a coarse status phase, reconnect posture,
+and exact runtime-recorded connect/disconnect/failure timestamps.
 That feedback surface also adds exact desired subscription/filter state and
 exact retry-scheduling truth that are specific to the package-owned runner
 integration seam.
@@ -25,6 +28,12 @@ Release-facing semantic shorthand for that feedback surface:
 - derived: values computed from recorded timestamps at snapshot time
 - policy-derived: runtime policy decisions such as explicit shutdown or retry exhaustion
 - bounded runtime-known: only the failure categories the runtime can truly distinguish today
+
+Status-snapshot shorthand:
+
+- exportable: safe to serialize for downstream persistence/reporting
+- runtime-recorded timestamp: captured by this runtime instance at the time the transition was observed
+- optional disconnect reason: may be `null` on clean close paths where the runtime has no richer cause object
 
 ---
 

@@ -8,6 +8,7 @@ use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
+use Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
@@ -20,6 +21,8 @@ use Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
 use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
 use Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot;
+use Apntalk\EslReact\Runner\RuntimeStatusPhase;
+use Apntalk\EslReact\Runner\RuntimeStatusSnapshot;
 use PHPUnit\Framework\TestCase;
 
 final class PublicApiContractTest extends TestCase
@@ -114,11 +117,35 @@ final class PublicApiContractTest extends TestCase
         self::assertTrue(enum_exists(RuntimeReconnectPhase::class));
     }
 
+    public function testRuntimeRunnerHandleExposesStatusSnapshotMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'statusSnapshot'));
+        self::assertTrue(is_a(RuntimeRunnerHandle::class, RuntimeStatusProviderInterface::class, true));
+
+        $method = new \ReflectionMethod(RuntimeRunnerHandle::class, 'statusSnapshot');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeStatusSnapshot::class, $returnType->getName());
+    }
+
+    public function testRuntimeStatusPhaseIsStableEnumSurface(): void
+    {
+        self::assertTrue(enum_exists(RuntimeStatusPhase::class));
+    }
+
+    public function testRuntimeStatusSnapshotExposesStableExportHelpers(): void
+    {
+        self::assertTrue(method_exists(RuntimeStatusSnapshot::class, 'toArray'));
+        self::assertTrue(is_a(RuntimeStatusSnapshot::class, \JsonSerializable::class, true));
+    }
+
     public function testRunnerFeedbackReadModelsRemainStablePublicSurface(): void
     {
         self::assertTrue(class_exists(RuntimeSubscriptionStateSnapshot::class));
         self::assertTrue(class_exists(RuntimeObservedSubscriptionStateSnapshot::class));
         self::assertTrue(class_exists(RuntimeReconnectStateSnapshot::class));
+        self::assertTrue(class_exists(RuntimeStatusSnapshot::class));
     }
 
     public function testAsyncEslRuntimeRunnerHasStableReturnType(): void

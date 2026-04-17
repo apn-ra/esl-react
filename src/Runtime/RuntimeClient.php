@@ -71,6 +71,11 @@ final class RuntimeClient implements AsyncEslClientInterface
     private ?float $reconnectTerminalStoppedAtMicros = null;
     private ?\Throwable $pendingCloseReason = null;
     private int $connectionGeneration = 0;
+    private ?float $lastSuccessfulConnectAtMicros = null;
+    private ?float $lastDisconnectAtMicros = null;
+    private ?string $lastDisconnectReasonClass = null;
+    private ?string $lastDisconnectReasonMessage = null;
+    private ?float $lastFailureAtMicros = null;
 
     public function __construct(
         private readonly RuntimeConfig $config,
@@ -211,6 +216,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         if ($this->connectDeferred !== null && $this->connection === null) {
+            $disconnectReason = new ConnectionLostException('Disconnect requested before auth completed');
             $this->draining = true;
             $this->supervisionEnabled = false;
             $this->reconnects->cancel();
@@ -225,8 +231,9 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
+            $this->recordDisconnectObservation($disconnectReason);
             $this->notifyLifecycleChange();
-            $this->settleConnectFailure(new ConnectionLostException('Disconnect requested before auth completed'));
+            $this->settleConnectFailure($disconnectReason);
 
             return $this->resolvedVoid();
         }
@@ -243,6 +250,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->connectionState = ConnectionState::Closed;
             $this->sessionState = SessionState::Disconnected;
             $this->livenessState = LivenessState::Dead;
+            $this->recordDisconnectObservation();
             $this->notifyLifecycleChange();
             return $this->resolvedVoid();
         }
@@ -427,6 +435,26 @@ final class RuntimeClient implements AsyncEslClientInterface
     public function connectionGeneration(): int
     {
         return $this->connectionGeneration;
+    }
+
+    /**
+     * @return array{
+     *   last_successful_connect_at_micros: ?float,
+     *   last_disconnect_at_micros: ?float,
+     *   last_disconnect_reason_class: ?string,
+     *   last_disconnect_reason_message: ?string,
+     *   last_failure_at_micros: ?float
+     * }
+     */
+    public function statusObservation(): array
+    {
+        return [
+            'last_successful_connect_at_micros' => $this->lastSuccessfulConnectAtMicros,
+            'last_disconnect_at_micros' => $this->lastDisconnectAtMicros,
+            'last_disconnect_reason_class' => $this->lastDisconnectReasonClass,
+            'last_disconnect_reason_message' => $this->lastDisconnectReasonMessage,
+            'last_failure_at_micros' => $this->lastFailureAtMicros,
+        ];
     }
 
     public function assertCanAcceptSessionMutation(): void
@@ -643,6 +671,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->sessionState = SessionState::Disconnected;
         }
         $this->livenessState = LivenessState::Dead;
+        $this->recordDisconnectObservation($reason);
         $this->notifyLifecycleChange();
         $disconnectReason = $reason ?? new ConnectionLostException();
         if ($this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason)) {
@@ -690,6 +719,7 @@ final class RuntimeClient implements AsyncEslClientInterface
 
     private function recordError(\Throwable $e): void
     {
+        $this->lastFailureAtMicros = microtime(true) * 1_000_000.0;
         $this->health?->recordError($e);
         $this->notifyLifecycleChange();
     }
@@ -906,6 +936,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->heartbeat->recordActivity();
         $this->heartbeat->start();
         $this->livenessState = $this->heartbeat->state();
+        $this->lastSuccessfulConnectAtMicros = microtime(true) * 1_000_000.0;
         $this->notifyLifecycleChange();
     }
 
@@ -940,6 +971,13 @@ final class RuntimeClient implements AsyncEslClientInterface
         if ($this->reconnectTerminalStoppedAtMicros === null) {
             $this->reconnectTerminalStoppedAtMicros = microtime(true) * 1_000_000.0;
         }
+    }
+
+    private function recordDisconnectObservation(?\Throwable $reason = null): void
+    {
+        $this->lastDisconnectAtMicros = microtime(true) * 1_000_000.0;
+        $this->lastDisconnectReasonClass = $reason !== null ? get_class($reason) : null;
+        $this->lastDisconnectReasonMessage = $reason?->getMessage();
     }
 
     private function startDrainTimers(): void

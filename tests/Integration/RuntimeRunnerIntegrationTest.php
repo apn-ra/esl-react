@@ -14,14 +14,16 @@ use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
+use Apntalk\EslReact\Exceptions\ConnectionLostException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
 use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
 use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
-use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use Apntalk\EslReact\Runner\RuntimeRunnerState;
+use Apntalk\EslReact\Runner\RuntimeSessionContext;
+use Apntalk\EslReact\Runner\RuntimeStatusPhase;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
@@ -837,6 +839,16 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
         self::assertNull($feedback->reconnectState()->lastScheduledBackoffDelaySeconds);
         self::assertGreaterThanOrEqual(0.0, $feedback->reconnectState()->terminalStoppedDurationSeconds ?? -1.0);
+        $status = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Failed, $status->phase);
+        self::assertFalse($status->isRuntimeActive);
+        self::assertFalse($status->isRecoveryInProgress);
+        self::assertNull($status->lastSuccessfulConnectAtMicros);
+        self::assertNotNull($status->lastFailureAtMicros);
+        self::assertSame(AuthenticationException::class, $status->lastFailureClass);
+        self::assertSame('invalid password', $status->lastFailureMessage);
+        self::assertSame(AuthenticationException::class, $status->startupErrorClass);
+        self::assertSame('invalid password', $status->startupErrorMessage);
         self::assertSame('starting', $markers[0]['runner']);
         self::assertSame('failed', $markers[array_key_last($markers)]['runner']);
         self::assertTrue($markers[array_key_last($markers)]['failed']);
@@ -890,11 +902,25 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertFalse($reconnecting->isLive());
         self::assertTrue($reconnecting->isReconnecting());
         self::assertFalse($reconnecting->isDraining());
+        $reconnectingStatus = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Reconnecting, $reconnectingStatus->phase);
+        self::assertTrue($reconnectingStatus->isRuntimeActive);
+        self::assertTrue($reconnectingStatus->isRecoveryInProgress);
+        self::assertNotNull($reconnectingStatus->lastSuccessfulConnectAtMicros);
+        self::assertNotNull($reconnectingStatus->lastDisconnectAtMicros);
+        self::assertNull($reconnectingStatus->lastDisconnectReasonClass);
 
         $this->waitUntil(
             fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated,
             0.5,
         );
+
+        $recoveredStatus = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Active, $recoveredStatus->phase);
+        self::assertTrue($recoveredStatus->isRuntimeActive);
+        self::assertFalse($recoveredStatus->isRecoveryInProgress);
+        self::assertTrue($recoveredStatus->hasHeartbeatObservation());
+        self::assertNotNull($recoveredStatus->lastSuccessfulConnectAtMicros);
 
         $this->await($handle->client()->disconnect());
 
@@ -922,6 +948,14 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             $feedback->reconnectState()->lastRetryAttemptStartedAtMicros ?? 0.0,
             $feedback->reconnectState()->terminalStoppedAtMicros ?? 0.0,
         );
+        $closedStatus = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Closed, $closedStatus->phase);
+        self::assertFalse($closedStatus->isRuntimeActive);
+        self::assertFalse($closedStatus->isRecoveryInProgress);
+        self::assertNotNull($closedStatus->lastSuccessfulConnectAtMicros);
+        self::assertNotNull($closedStatus->lastDisconnectAtMicros);
+        self::assertNull($closedStatus->lastDisconnectReasonClass);
+        self::assertNull($closedStatus->lastDisconnectReasonMessage);
 
         $server->close();
     }
@@ -1005,6 +1039,15 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         );
         self::assertSame(ConnectionState::Disconnected, $feedback->connectionState());
         self::assertSame(SessionState::Disconnected, $feedback->sessionState());
+        $status = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Disconnected, $status->phase);
+        self::assertTrue($status->isRuntimeActive);
+        self::assertFalse($status->isRecoveryInProgress);
+        self::assertNotNull($status->lastSuccessfulConnectAtMicros);
+        self::assertNotNull($status->lastDisconnectAtMicros);
+        self::assertSame(ConnectionException::class, $status->lastFailureClass);
+        self::assertNotNull($status->lastFailureAtMicros);
+        self::assertSame(RuntimeReconnectStopReason::RetryExhausted, $status->reconnectState->terminalStopReason);
     }
 
     public function testRunnerLifecycleObservationRemainsTruthfulDuringEventAndBgapiActivity(): void

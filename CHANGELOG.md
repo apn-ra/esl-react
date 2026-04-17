@@ -12,10 +12,12 @@ Checkpoint release prep note for the next candidate after `v0.2.7`:
 ### Added
 - Additive prepared-bootstrap replay-capture input contract so higher layers can inject runtime replay sinks on the runner seam without ad hoc `RuntimeConfig` wiring
 - Stable runner feedback snapshot packaging existing health truth with prepared runtime identity for downstream health/reporting integrations
+- Stable runner status snapshot packaging runtime-owned lifecycle/reconnect truth plus recent connect/disconnect/failure observations for downstream status export
 - Clearer bounded runtime/session identity propagation via named `RuntimeSessionContext` fields plus generic scalar metadata reused by runner feedback and prepared-bootstrap replay metadata
 
 ### Changed
 - Runtime feedback semantics are now more explicit: runner feedback distinguishes exact desired subscription/filter state, exact reconnect retry scheduling truth, and exact command-bus active vs queued API counts without changing existing runtime behavior
+- Runner status semantics are now explicit: the new export seam distinguishes exact runtime-recorded connect/disconnect/failure timestamps from optional bounded disconnect-cause detail, and does not over-claim process-level loop liveness or cross-process supervision
 - Runtime feedback now also distinguishes exact desired subscription/filter state from conservative locally observed-applied state for the current authenticated session, with explicit invalidation on reconnect and rebuild after restore completes
 - Runtime feedback now also exposes additive reconnect/backoff detail, including exact reconnect phase and attempt/delay truth plus conservative local next-due and remaining-delay timing estimates when a retry timer is pending
 - Runtime feedback now also exposes additive terminal reconnect-stop truth, including exact terminal-stop/exhaustion booleans plus conservative runtime-known stop categories such as explicit shutdown, retry exhaustion/disabled retry, auth rejection, and handshake failure

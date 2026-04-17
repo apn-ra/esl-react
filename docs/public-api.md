@@ -4,8 +4,8 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
-Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, runner lifecycle snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
-It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals, including explicit prepared-bootstrap replay injection and a stable runner feedback snapshot for downstream health/reporting adapters.
+Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, runner lifecycle snapshots, runner status snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
+It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals, including explicit prepared-bootstrap replay injection, a stable runner feedback snapshot, and an exportable runner status snapshot for downstream health/reporting adapters.
 
 ---
 
@@ -151,6 +151,7 @@ Current runner notes:
 - The returned handle exposes `startupPromise()` plus a coarse startup state model.
 - The returned handle exposes `lifecycleSnapshot()` for higher layers that need read-only startup + live runtime observation without taking runtime ownership.
 - The returned handle exposes `feedbackSnapshot()` for higher layers that need one stable read model for prepared runtime identity plus drain/inflight/subscription/retry health feedback.
+- The returned handle exposes `statusSnapshot()` for higher layers that need an exportable runtime-owned status feed with lifecycle phase, reconnect posture, and recent connect/disconnect/failure timestamps.
 - The returned handle exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Package-owned live harnesses cover the runner handle startup and explicit drain-to-stop observation path on a real FreeSWITCH target.
 - Package-owned live harnesses now cover unexpected transport-loss reconnect and recovery on the runner seam in opt-in lab environments that provide safe disruption and restore commands.
@@ -284,6 +285,40 @@ Safe release-facing consumption rules:
 - policy-derived fields explain what the runtime policy decided, not a deeper transport/server diagnosis
 - bounded runtime-known fields describe only the failure categories the runtime can truly distinguish today
 - nothing on this surface should be interpreted as a full metrics stream, remote receipt ledger, or cross-process history
+
+### RuntimeStatusSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeStatusSnapshot
+```
+
+Read-only exportable status snapshot returned by
+`RuntimeRunnerHandle::statusSnapshot()`.
+
+It packages:
+
+- endpoint identity
+- optional `RuntimeSessionContext`
+- current `RuntimeRunnerState`
+- a coarse packaged `RuntimeStatusPhase`
+- the current `HealthSnapshot`
+- the current `RuntimeReconnectStateSnapshot`
+- exact runtime-instance activity and recovery-in-progress booleans
+- exact runtime-recorded timestamps for last successful authenticated connect and last disconnect observation
+- optional bounded disconnect reason summary when the runtime actually observed one
+- last recorded runtime failure summary and timestamp
+- startup error class/message when startup failed
+
+Current status semantics:
+
+- `phase` is a coarse packaged lifecycle view for downstream export. It does not replace `ConnectionState`, `SessionState`, or `RuntimeReconnectStateSnapshot`.
+- `isRuntimeActive` means this runtime instance is still active from `esl-react`'s point of view. It does not prove that the outer ReactPHP process or global event loop is alive.
+- `isRecoveryInProgress` is exact for the current reconnect/backoff or session-restore path (`waiting_to_retry`, `attempting_reconnect`, `restoring_session`).
+- `lastSuccessfulConnectAtMicros` is recorded only after authentication and desired-state restore complete successfully.
+- `lastDisconnectAtMicros` is recorded whenever the runtime observes the active session end or a terminal explicit shutdown path closes before a session was fully established.
+- `lastDisconnectReasonClass` / `lastDisconnectReasonMessage` are optional bounded local observations only. Clean closes may leave them `null`.
+- `lastFailure*` fields report only the most recent runtime-recorded failure summary. They are not a durable incident history.
+- `toArray()` and `jsonSerialize()` are stable export helpers for downstream persistence/reporting layers. They do not imply cross-process supervision guarantees.
 
 ### RuntimeSubscriptionStateSnapshot
 
@@ -608,6 +643,7 @@ Apntalk\EslReact\Runner\RuntimeRunnerHandle
 | `sessionContext()` | `?RuntimeSessionContext` | Runtime-local session context when startup used a prepared-bootstrap input |
 | `lifecycleSnapshot()` | `RuntimeLifecycleSnapshot` | Read-only packaged runner + health lifecycle snapshot |
 | `feedbackSnapshot()` | `RuntimeFeedbackSnapshot` | Read-only packaged runtime feedback snapshot for downstream health/reporting |
+| `statusSnapshot()` | `RuntimeStatusSnapshot` | Read-only exportable live-runtime status snapshot for downstream status feeds |
 | `onLifecycleChange(callable $listener)` | `void` | Register a synchronous lifecycle listener receiving `RuntimeLifecycleSnapshot` values |
 
 `onLifecycleChange()` notes:

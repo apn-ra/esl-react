@@ -4,10 +4,13 @@ namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
+use Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface;
 use Apntalk\EslReact\Runtime\RuntimeClient;
+use Apntalk\EslReact\Connection\ConnectionState;
+use Apntalk\EslReact\Session\SessionState;
 use React\Promise\PromiseInterface;
 
-final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface
+final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, RuntimeStatusProviderInterface
 {
     /** @var list<callable(RuntimeLifecycleSnapshot): void> */
     private array $lifecycleListeners = [];
@@ -162,6 +165,42 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface
         );
     }
 
+    public function statusSnapshot(): RuntimeStatusSnapshot
+    {
+        $feedback = $this->feedbackSnapshot();
+        $statusObservation = [
+            'last_successful_connect_at_micros' => null,
+            'last_disconnect_at_micros' => null,
+            'last_disconnect_reason_class' => null,
+            'last_disconnect_reason_message' => null,
+            'last_failure_at_micros' => null,
+        ];
+
+        if ($this->client instanceof RuntimeClient) {
+            $statusObservation = $this->client->statusObservation();
+        }
+
+        return new RuntimeStatusSnapshot(
+            endpoint: $this->endpoint,
+            sessionContext: $this->sessionContext,
+            runnerState: $this->state,
+            phase: $this->statusPhase($feedback),
+            health: $feedback->health,
+            reconnectState: $feedback->reconnectState,
+            isRuntimeActive: $this->isRuntimeActive($feedback),
+            isRecoveryInProgress: $this->isRecoveryInProgress($feedback),
+            lastSuccessfulConnectAtMicros: $statusObservation['last_successful_connect_at_micros'],
+            lastDisconnectAtMicros: $statusObservation['last_disconnect_at_micros'],
+            lastDisconnectReasonClass: $statusObservation['last_disconnect_reason_class'],
+            lastDisconnectReasonMessage: $statusObservation['last_disconnect_reason_message'],
+            lastFailureAtMicros: $statusObservation['last_failure_at_micros'],
+            lastFailureClass: $feedback->health->lastErrorClass,
+            lastFailureMessage: $feedback->health->lastErrorMessage,
+            startupErrorClass: $this->startupError !== null ? get_class($this->startupError) : null,
+            startupErrorMessage: $this->startupError?->getMessage(),
+        );
+    }
+
     public function onLifecycleChange(callable $listener): void
     {
         $this->lifecycleListeners[] = $listener;
@@ -202,6 +241,52 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface
             'lastRuntimeErrorClass' => $snapshot->lastRuntimeErrorClass(),
             'lastRuntimeErrorMessage' => $snapshot->lastRuntimeErrorMessage(),
         ], JSON_THROW_ON_ERROR);
+    }
+
+    private function statusPhase(RuntimeFeedbackSnapshot $feedback): RuntimeStatusPhase
+    {
+        $health = $feedback->health;
+
+        if ($this->state === RuntimeRunnerState::Failed || $health->sessionState === SessionState::Failed) {
+            return RuntimeStatusPhase::Failed;
+        }
+
+        return match ($health->connectionState) {
+            ConnectionState::Connecting => $this->state === RuntimeRunnerState::Starting
+                ? RuntimeStatusPhase::Starting
+                : RuntimeStatusPhase::Connecting,
+            ConnectionState::Connected,
+            ConnectionState::Authenticating => RuntimeStatusPhase::Authenticating,
+            ConnectionState::Authenticated => RuntimeStatusPhase::Active,
+            ConnectionState::Reconnecting => RuntimeStatusPhase::Reconnecting,
+            ConnectionState::Draining => RuntimeStatusPhase::Draining,
+            ConnectionState::Closed => RuntimeStatusPhase::Closed,
+            ConnectionState::Disconnected => $this->state === RuntimeRunnerState::Starting
+                ? RuntimeStatusPhase::Starting
+                : RuntimeStatusPhase::Disconnected,
+        };
+    }
+
+    private function isRuntimeActive(RuntimeFeedbackSnapshot $feedback): bool
+    {
+        if ($this->state === RuntimeRunnerState::Failed) {
+            return false;
+        }
+
+        return $feedback->connectionState() !== ConnectionState::Closed;
+    }
+
+    private function isRecoveryInProgress(RuntimeFeedbackSnapshot $feedback): bool
+    {
+        return in_array(
+            $feedback->reconnectState->phase,
+            [
+                RuntimeReconnectPhase::WaitingToRetry,
+                RuntimeReconnectPhase::AttemptingReconnect,
+                RuntimeReconnectPhase::RestoringSession,
+            ],
+            true,
+        );
     }
 
     private function callLifecycleListener(callable $listener, RuntimeLifecycleSnapshot $snapshot): void

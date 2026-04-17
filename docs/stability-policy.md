@@ -24,6 +24,7 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface`
 - `Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface`
 - `Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface`
+- `Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface`
 
 ### Entry point
 
@@ -50,6 +51,7 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Runner\RuntimeRunnerHandle`
 - `Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeStatusSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot`
@@ -57,6 +59,7 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Runner\RuntimeReconnectStopReason`
 - `Apntalk\EslReact\Runner\RuntimeRunnerState`
 - `Apntalk\EslReact\Runner\RuntimeSessionContext`
+- `Apntalk\EslReact\Runner\RuntimeStatusPhase`
 
 ### Exceptions
 
@@ -81,11 +84,13 @@ The following behaviors are considered stable even when the implementing types a
 - `DrainException` on accepted inflight work that is terminated by explicit bounded drain
 - `RuntimeRunnerHandle::onLifecycleChange()` immediate current-snapshot delivery and synchronous ordered callback semantics
 - `RuntimeRunnerHandle::feedbackSnapshot()` as a stable packaging of existing health truth plus prepared runtime identity
+- `RuntimeRunnerHandle::statusSnapshot()` as a stable export packaging of runtime-owned lifecycle/reconnect truth plus recent connect/disconnect/failure observations
 - `RuntimeFeedbackSnapshot::subscriptionState()` as exact desired subscription/filter state for the current runtime instance
 - `RuntimeFeedbackSnapshot::observedSubscriptionState()` as conservative locally observed-applied subscription/filter state for the current authenticated session, with explicit invalidation and rebuild semantics across reconnect
 - `RuntimeFeedbackSnapshot::reconnectState()` as stable reconnect/backoff detail packaging exact runtime/scheduler truth plus approximate local due/remaining timing
 - `RuntimeReconnectStateSnapshot::$isTerminallyStopped`, `$isRetryExhausted`, `$requiresExternalIntervention`, `$isFailClosedTerminalState`, `$terminalStopReason`, `$terminalStoppedAtMicros`, `$lastRetryAttemptStartedAtMicros`, `$lastScheduledRetryDueAtMicros`, `$lastScheduledBackoffDelaySeconds`, and `$terminalStoppedDurationSeconds` as stable additive reconnect terminal-state/timing truth on top of the reconnect detail surface
 - `RuntimeFeedbackSnapshot::isReconnectRetryScheduled()` as exact supervisor truth for whether a reconnect retry timer is pending
+- `RuntimeStatusSnapshot::$phase`, `$isRuntimeActive`, `$isRecoveryInProgress`, `$lastSuccessfulConnectAtMicros`, `$lastDisconnectAtMicros`, `$lastDisconnectReasonClass`, `$lastDisconnectReasonMessage`, `$lastFailureAtMicros`, `$lastFailureClass`, `$lastFailureMessage`, `toArray()`, and `jsonSerialize()` as stable export fields/helpers for downstream status feeds
 - Live package-owned validation for runner startup and explicit drain-to-stop observation, plus live-verified opt-in automated reconnect recovery validation when safe disruption/restore commands are supplied by the environment
 - Deterministic and opt-in live runner-surface validation for event subscription plus `bgapi()` completion activity against real FreeSWITCH event and `BACKGROUND_JOB` traffic
 - Deterministic runner-surface validation for combined pending `bgapi()` plus event-subscription behavior during degraded liveness and reconnecting runtime states

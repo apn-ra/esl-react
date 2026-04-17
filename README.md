@@ -9,7 +9,7 @@ Current implementation status:
 - Implemented and test-covered: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
 - Implemented and contract-stabilized: replay-safe runtime hook emission for supported runtime paths.
 - Implemented and test-covered in the current runner milestones: a narrow prepared-input runner seam plus a richer prepared-bootstrap input path that can carry prepared ReactPHP transport access, prepared ingress pipeline access, and runtime-local session context.
-- Implemented and test-covered for higher-layer observation: runner lifecycle snapshots and push-based lifecycle callbacks that expose startup state, connection/session health, liveness, reconnecting, drain, and failure truth without giving downstream packages runtime ownership.
+- Implemented and test-covered for higher-layer observation: runner lifecycle snapshots, exportable runner status snapshots, and push-based lifecycle callbacks that expose startup state, connection/session health, liveness, reconnecting, drain, failure truth, and recent runtime-owned status timestamps without giving downstream packages runtime ownership.
 - Present but still minimal relative to the plan: heartbeat orchestration beyond the current liveness probe and recover-on-silence behavior.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
@@ -131,6 +131,7 @@ Current runner truth:
 - The coarse runner startup lifecycle is `starting -> running` or `starting -> failed`.
 - The returned handle exposes `lifecycleSnapshot()` as the preferred read-only higher-layer observation seam for startup state, connection/session health, liveness, reconnecting, drain, and failure truth.
 - The returned handle exposes `feedbackSnapshot()` as the preferred stable reporting seam for prepared runtime identity plus drain, inflight, subscription, and retry feedback.
+- The returned handle exposes `statusSnapshot()` as the preferred exportable live-runtime status seam for downstream readiness/liveness linkage and persisted status feeds.
 - The returned handle also exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Ongoing runtime lifecycle remains visible through the stable client health model (`ConnectionState`, `SessionState`, `HealthSnapshot`).
 - `PreparedRuntimeInput` preserves the config-driven path for simple adapters.
@@ -211,6 +212,31 @@ Safe consumption rules:
 - treat `reconnectState()->terminalStoppedDurationSeconds` as derived local elapsed time, not a persisted transition timestamp
 - treat `reconnectState()->terminalStopReason` as a bounded runtime-known or policy-derived category, not a general transport diagnostics framework
 - when `subscribeAll` is active, prefer `subscriptionState()->subscribeAll` or `observedSubscriptionState()->subscribeAll` over `activeSubscriptions()`, because the event-name list intentionally stays empty in that mode
+
+### Runner status quick reference
+
+`RuntimeRunnerHandle::statusSnapshot()` is the stable release-facing status
+read model for downstream packages that need a truthful exported runtime status
+feed without reconstructing reconnect/session truth themselves.
+
+```php
+$status = $handle->statusSnapshot();
+
+if ($status->isRecoveryInProgress) {
+    // reconnect/backoff or session-restore is underway
+}
+
+$export = $status->toArray();
+```
+
+Safe consumption rules:
+
+- treat `phase` as a coarse packaged lifecycle phase, not as a second control-plane state machine
+- treat `isRuntimeActive` as truth about this runtime instance still being active, not as proof that the outer ReactPHP process/event loop is alive
+- treat `lastSuccessfulConnectAtMicros` and `lastDisconnectAtMicros` as exact runtime-recorded local timestamps
+- treat `lastDisconnectReasonClass` and `lastDisconnectReasonMessage` as optional bounded local observation; clean closes may leave them `null`
+- treat `lastFailure*` fields as the most recent runtime-recorded failure summary only; they are not a durable incident log
+- use `toArray()` / `jsonSerialize()` only for observational export or persistence owned by downstream packages, not as a cross-process supervision guarantee
 
 ---
 

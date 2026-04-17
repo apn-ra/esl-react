@@ -43,6 +43,14 @@ This avoids creating a second competing control-plane model in `esl-react`.
 This remains observational only. It does not add control hooks or define a
 second public state machine.
 
+`RuntimeRunnerHandle::statusSnapshot()` is the export-oriented companion for
+downstream consumers that need more than the coarse lifecycle callback shape.
+It packages the same runtime-owned truth with a bounded `RuntimeStatusPhase`,
+the current reconnect snapshot, and exact runtime-recorded timestamps for the
+last successful authenticated connect, the last disconnect observation, and the
+last recorded failure. This stays observational only and does not imply
+process-level loop liveness, durable storage, or cross-process supervision.
+
 The automated live harness currently validates this observation surface through
 startup, authenticated live operation, explicit `disconnect()` drain entry, and
 the final `Closed` state. Unexpected transport-loss reconnect recovery is also
