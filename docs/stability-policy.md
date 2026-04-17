@@ -72,6 +72,7 @@ The following behaviors are considered stable even when the implementing types a
 - `ConnectionLostException` on inflight api commands during unexpected transport loss
 - `DrainException` on accepted inflight work that is terminated by explicit bounded drain
 - `RuntimeRunnerHandle::onLifecycleChange()` immediate current-snapshot delivery and synchronous ordered callback semantics
+- Live package-owned validation for runner startup and explicit drain-to-stop observation, plus live-verified opt-in automated reconnect recovery validation when safe disruption/restore commands are supplied by the environment
 
 ---
 

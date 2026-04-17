@@ -9,7 +9,7 @@ Current implementation status:
 - Implemented and test-covered: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
 - Implemented and contract-stabilized: replay-safe runtime hook emission for supported runtime paths.
 - Implemented and test-covered in the current runner milestones: a narrow prepared-input runner seam plus a richer prepared-bootstrap input path that can carry prepared ReactPHP transport access, prepared ingress pipeline access, and runtime-local session context.
-- Implemented and test-covered for higher-layer observation: runner lifecycle snapshots that expose startup state, connection/session health, liveness, reconnecting, drain, and failure truth without giving downstream packages runtime ownership.
+- Implemented and test-covered for higher-layer observation: runner lifecycle snapshots and push-based lifecycle callbacks that expose startup state, connection/session health, liveness, reconnecting, drain, and failure truth without giving downstream packages runtime ownership.
 - Present but still minimal relative to the plan: heartbeat orchestration beyond the current liveness probe and recover-on-silence behavior.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
@@ -417,6 +417,34 @@ vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeCompatibilityTest.
 The live harness verifies direct connect/auth, one read-only `api()` command (`status` by default), and clean shutdown. It is skipped unless explicitly enabled and is not a replacement for the deterministic fake-server suite.
 
 For local development, you may place these variables in an untracked `.env.live.local` or `.env.testing.local` file. PHPUnit loads only `ESL_REACT_LIVE_*` keys from those files via `tests/bootstrap.php`; already-exported shell variables take precedence. Use `.env.live.example` as a placeholder template and keep real credentials local.
+
+An additional opt-in live runner lifecycle harness is available for the public runner and observation surfaces consumed by higher layers:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerLifecycleCompatibilityTest.php
+```
+
+It verifies the config-driven runner seam, immediate lifecycle observation registration, authenticated live startup, and explicit drain-to-closed shutdown on a real FreeSWITCH target.
+
+For labs that can safely automate transport disruption and restoration, an additional opt-in live runner reconnect harness is available:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_RECONNECT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_RECONNECT_DISRUPT_COMMAND='./scripts/disrupt-esl-path.sh' \
+ESL_REACT_LIVE_RECONNECT_RESTORE_COMMAND='./scripts/restore-esl-path.sh' \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerReconnectCompatibilityTest.php
+```
+
+This harness runs the public runner seam, subscribes through the public API, executes the configured disrupt/restore commands, and asserts that snapshot plus push-based lifecycle observation surfaces report unexpected transport loss as reconnecting rather than draining before later recovery to authenticated/live truth. This reconnect path has been exercised successfully against a real FreeSWITCH target in an opt-in lab environment. It remains intentionally opt-in and requires target-specific commands that are safe, bounded, and idempotent in your lab environment.
 
 An additional opt-in live event receipt harness is available when a safe event source is expected:
 

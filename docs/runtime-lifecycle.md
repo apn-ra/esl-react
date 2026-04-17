@@ -43,6 +43,13 @@ This avoids creating a second competing control-plane model in `esl-react`.
 This remains observational only. It does not add control hooks or define a
 second public state machine.
 
+The automated live harness currently validates this observation surface through
+startup, authenticated live operation, explicit `disconnect()` drain entry, and
+the final `Closed` state. Unexpected transport-loss reconnect recovery is also
+validated by an opt-in automated lab harness when the environment provides safe
+disruption and restore commands, alongside the existing manual live harnesses
+for staging paths where operator-driven disruption is still preferred.
+
 For richer prepared-bootstrap inputs, the prepared connector participates in
 the normal `ConnectionState` transitions because it supplies the live connection
 for startup and reconnect attempts. The prepared ingress pipeline is reset as

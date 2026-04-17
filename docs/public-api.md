@@ -151,6 +151,8 @@ Current runner notes:
 - The returned handle exposes `startupPromise()` plus a coarse startup state model.
 - The returned handle exposes `lifecycleSnapshot()` for higher layers that need read-only startup + live runtime observation without taking runtime ownership.
 - The returned handle exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
+- Package-owned live harnesses cover the runner handle startup and explicit drain-to-stop observation path on a real FreeSWITCH target.
+- Package-owned live harnesses now cover unexpected transport-loss reconnect and recovery on the runner seam in opt-in lab environments that provide safe disruption and restore commands.
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
 - Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
 - `PreparedRuntimeDialTargetInputInterface` additively allows richer prepared-bootstrap inputs to override the dial target URI used by the prepared connector for startup and reconnect attempts.

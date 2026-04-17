@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - Additive prepared dial-target runner input contract so richer prepared-bootstrap handoff can direct the prepared connector to non-default URIs, including TLS-style dial targets, for both startup and reconnect attempts without requiring direct `apntalk/esl-core` transport handoff
+- `RuntimeRunnerHandle::onLifecycleChange()` as a stable push-based companion to `lifecycleSnapshot()` for higher-layer lifecycle observation without polling
+- Opt-in live FreeSWITCH runner lifecycle harness for public runner startup, authenticated/live observation, explicit drain, and terminal closed-state verification
+- Opt-in automated live runner reconnect harness for public runner reconnect observation and recovery verification when the lab environment provides safe disrupt/restore commands
+
+### Changed
+- Public runner docs now describe the live-verified milestone truthfully: runner startup/drain/closed behavior and automated reconnect recovery on the public runner seam have both been exercised against a real FreeSWITCH target in an opt-in lab environment
 
 ## [0.2.0] - 2026-04-17
 
