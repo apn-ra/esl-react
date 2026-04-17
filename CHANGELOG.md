@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-17
+
 ### Added
+- Runner lifecycle snapshots via `RuntimeRunnerHandle::lifecycleSnapshot()`, giving higher-layer packages a read-only observation surface for startup state, connection/session health, liveness, reconnecting, drain, and failure truth without taking runtime ownership
 - Release-oriented smoke test covering the documented happy path: public runtime construction, startup subscription/filter seeding, connect/auth, one successful `api()` call, one delivered event, and clean shutdown
 - Bounded chaos integration coverage for controlled runtime reactions to unexpected disconnect, post-success malformed traffic, and replay-sink failure during reconnect-era traffic
 - Phased hardening coverage for protocol edges, reconnect lifecycle stress, burst/backpressure correctness, and short soak-style runtime confidence

@@ -62,4 +62,16 @@ final class RuntimeRunnerHandle
     {
         return $this->sessionContext;
     }
+
+    public function lifecycleSnapshot(): RuntimeLifecycleSnapshot
+    {
+        return new RuntimeLifecycleSnapshot(
+            endpoint: $this->endpoint,
+            runnerState: $this->state,
+            sessionContext: $this->sessionContext,
+            health: $this->client->health()->snapshot(),
+            startupErrorClass: $this->startupError !== null ? get_class($this->startupError) : null,
+            startupErrorMessage: $this->startupError?->getMessage(),
+        );
+    }
 }

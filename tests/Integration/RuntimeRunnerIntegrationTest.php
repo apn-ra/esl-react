@@ -6,10 +6,13 @@ use Apntalk\EslCore\Inbound\InboundPipeline;
 use Apntalk\EslCore\Replies\ApiReply;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Config\RuntimeConfig;
+use Apntalk\EslReact\Config\HeartbeatConfig;
+use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
+use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use Apntalk\EslReact\Runner\RuntimeRunnerState;
 use Apntalk\EslReact\Session\SessionState;
@@ -48,11 +51,28 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame('tcp://127.0.0.1:' . $server->port(), $handle->endpoint());
         self::assertSame(RuntimeRunnerState::Starting, $handle->state());
+        self::assertTrue($handle->lifecycleSnapshot()->isStarting());
 
         $this->await($handle->startupPromise());
 
         self::assertSame(RuntimeRunnerState::Running, $handle->state());
         self::assertNull($handle->startupError());
+
+        $lifecycle = $handle->lifecycleSnapshot();
+        self::assertInstanceOf(RuntimeLifecycleSnapshot::class, $lifecycle);
+        self::assertSame(RuntimeRunnerState::Running, $lifecycle->runnerState);
+        self::assertSame(ConnectionState::Authenticated, $lifecycle->connectionState());
+        self::assertSame(SessionState::Active, $lifecycle->sessionState());
+        self::assertTrue($lifecycle->isConnected());
+        self::assertTrue($lifecycle->isAuthenticated());
+        self::assertTrue($lifecycle->isLive());
+        self::assertFalse($lifecycle->isStarting());
+        self::assertFalse($lifecycle->isReconnecting());
+        self::assertFalse($lifecycle->isDraining());
+        self::assertFalse($lifecycle->isStopped());
+        self::assertFalse($lifecycle->isFailed());
+        self::assertNull($lifecycle->startupErrorClass);
+        self::assertNull($lifecycle->startupErrorMessage);
 
         $reply = $this->await($handle->client()->api('status'));
 
@@ -162,6 +182,79 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame(RuntimeRunnerState::Failed, $handle->state());
         self::assertInstanceOf(AuthenticationException::class, $handle->startupError());
+
+        $lifecycle = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Failed, $lifecycle->runnerState);
+        self::assertTrue($lifecycle->isFailed());
+        self::assertSame(AuthenticationException::class, $lifecycle->startupErrorClass);
+        self::assertSame('invalid password', $lifecycle->startupErrorMessage);
+        self::assertSame(ConnectionState::Disconnected, $lifecycle->connectionState());
+        self::assertSame(SessionState::Failed, $lifecycle->sessionState());
+
+        $server->close();
+    }
+
+    public function testRunnerLifecycleSnapshotObservesReconnectAndTerminalDisconnect(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.05),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            fn (): bool => $handle->lifecycleSnapshot()->isReconnecting(),
+            0.2,
+        );
+
+        $reconnecting = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $reconnecting->runnerState);
+        self::assertSame(ConnectionState::Reconnecting, $reconnecting->connectionState());
+        self::assertSame(SessionState::Disconnected, $reconnecting->sessionState());
+        self::assertFalse($reconnecting->isConnected());
+        self::assertFalse($reconnecting->isAuthenticated());
+        self::assertFalse($reconnecting->isLive());
+        self::assertTrue($reconnecting->isReconnecting());
+        self::assertFalse($reconnecting->isDraining());
+
+        $this->waitUntil(
+            fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated,
+            0.5,
+        );
+
+        $this->await($handle->client()->disconnect());
+
+        $closed = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $closed->runnerState);
+        self::assertSame(ConnectionState::Closed, $closed->connectionState());
+        self::assertSame(SessionState::Disconnected, $closed->sessionState());
+        self::assertFalse($closed->isConnected());
+        self::assertFalse($closed->isLive());
+        self::assertFalse($closed->isDraining());
+        self::assertTrue($closed->isStopped());
 
         $server->close();
     }

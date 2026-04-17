@@ -8,6 +8,11 @@
 $snapshot = $client->health()->snapshot();
 ```
 
+Higher-layer packages that start runtimes through `RuntimeRunnerInterface` may
+prefer `RuntimeRunnerHandle::lifecycleSnapshot()`. That snapshot includes the
+same `HealthSnapshot` truth plus runner startup state and prepared session
+context.
+
 ---
 
 ## HealthSnapshot fields

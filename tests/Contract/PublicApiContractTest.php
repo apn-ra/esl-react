@@ -9,6 +9,8 @@ use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
+use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
+use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
 use PHPUnit\Framework\TestCase;
 
 final class PublicApiContractTest extends TestCase
@@ -30,6 +32,17 @@ final class PublicApiContractTest extends TestCase
     public function testRuntimeRunnerContractExposesRunMethod(): void
     {
         self::assertTrue(method_exists(RuntimeRunnerInterface::class, 'run'));
+    }
+
+    public function testRuntimeRunnerHandleExposesLifecycleSnapshotMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'lifecycleSnapshot'));
+
+        $method = new \ReflectionMethod(RuntimeRunnerHandle::class, 'lifecycleSnapshot');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeLifecycleSnapshot::class, $returnType->getName());
     }
 
     public function testAsyncEslRuntimeRunnerHasStableReturnType(): void

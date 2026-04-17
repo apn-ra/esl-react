@@ -15,10 +15,10 @@ Hardening note for the implemented slice:
 
 The runtime maintains two parallel state machines: `ConnectionState` and `SessionState`. They are related but distinct. A connection can be `Authenticated` (ConnectionState) while the session is `Active` (SessionState) — both must be healthy for the runtime to be fully operational.
 
-The prepared-input runner seam also exposes a coarse `RuntimeRunnerState` model.
+The prepared-input runner seam exposes a coarse `RuntimeRunnerState` model.
 It is intentionally smaller than the ongoing runtime lifecycle model and exists
-only to describe the initial runner startup path for both config-driven inputs
-and richer prepared-bootstrap inputs:
+to describe the initial runner startup path for both config-driven inputs and
+richer prepared-bootstrap inputs:
 
 ```
 Starting
@@ -26,10 +26,13 @@ Starting
   -> Failed               on initial connect/auth failure
 ```
 
-After `RuntimeRunnerState` reaches `Running`, ongoing lifecycle truth remains on
-the stable runtime state surfaces: `ConnectionState`, `SessionState`, and
-`HealthSnapshot`. This avoids creating a second competing control-plane model in
-`esl-react`.
+`RuntimeRunnerHandle::lifecycleSnapshot()` is the preferred higher-layer
+observation seam. It combines `RuntimeRunnerState`, optional
+`RuntimeSessionContext`, startup failure detail, and the current `HealthSnapshot`
+in one read-only value object. After `RuntimeRunnerState` reaches `Running`,
+ongoing lifecycle truth still comes from `ConnectionState`, `SessionState`, and
+`HealthSnapshot`; the lifecycle snapshot only packages that truth for consumers.
+This avoids creating a second competing control-plane model in `esl-react`.
 
 For richer prepared-bootstrap inputs, the prepared connector participates in
 the normal `ConnectionState` transitions because it supplies the live connection

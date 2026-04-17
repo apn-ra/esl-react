@@ -45,6 +45,7 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Runner\PreparedRuntimeInput`
 - `Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput`
 - `Apntalk\EslReact\Runner\RuntimeRunnerHandle`
+- `Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeRunnerState`
 - `Apntalk\EslReact\Runner\RuntimeSessionContext`
 

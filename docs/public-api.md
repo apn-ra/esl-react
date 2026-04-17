@@ -4,7 +4,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
-Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
+Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, runner lifecycle snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
 It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals.
 
 ---
@@ -149,10 +149,46 @@ Current runner notes:
 
 - `run()` starts the live runtime immediately by delegating to the existing `connect()` path.
 - The returned handle exposes `startupPromise()` plus a coarse startup state model.
+- The returned handle exposes `lifecycleSnapshot()` for higher layers that need read-only startup + live runtime observation without taking runtime ownership.
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
 - Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
 - Ongoing runtime lifecycle after startup remains on the stable client/health surface rather than a second parallel runner control plane.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and decoded `InboundPipelineInterface` routing are not part of this runner-input expansion.
+
+### RuntimeLifecycleSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot
+```
+
+Read-only lifecycle and health observation returned by `RuntimeRunnerHandle::lifecycleSnapshot()`.
+
+It combines:
+
+- runner startup state (`RuntimeRunnerState`)
+- endpoint and optional `RuntimeSessionContext`
+- current `HealthSnapshot`
+- startup error class/message when startup failed
+
+Helper methods expose coarse truth for downstream packages:
+
+| Method | Meaning |
+|---|---|
+| `isConnected()` | Socket is at or above connected state |
+| `isStarting()` | Runner startup promise has not settled yet |
+| `isAuthenticated()` | Runtime has authenticated or is draining from an authenticated state |
+| `isLive()` | Heartbeat/liveness currently reports live |
+| `isReconnecting()` | Runtime health currently reports reconnecting |
+| `isDraining()` | Runtime health currently reports drain mode |
+| `isStopped()` | Runtime health reports terminal `Closed` connection state |
+| `isFailed()` | Runner startup failed or runtime session state is failed |
+| `connectionState()` | Current `ConnectionState`, if health is available |
+| `sessionState()` | Current `SessionState`, if health is available |
+| `reconnectAttempts()` | Current reconnect attempt count |
+| `lastHeartbeatAtMicros()` | Last observed heartbeat/activity timestamp |
+| `lastRuntimeErrorClass()` / `lastRuntimeErrorMessage()` | Last runtime error recorded by health |
+
+This is an observation surface only. It does not start, stop, reconnect, or supervise the runtime.
 
 ### RuntimeRunnerInputInterface
 
