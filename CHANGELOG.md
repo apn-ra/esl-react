@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-04-17
+
+### Added
+- Opt-in live runner reconnect + bgapi/event combined-condition harness for labs that can safely automate transport disruption/restoration while observing live event delivery and one safe `bgapi()` job on the same public runner handle
+- Live validation coverage for pre-fault event delivery, reconnect/no-drain lifecycle truth, desired subscription restoration, post-reconnect event delivery, post-reconnect `bgapi()` ack/completion, and snapshot/push lifecycle consistency across the same runner seam
+
+### Changed
+- Release-facing docs now distinguish deterministic pending-`bgapi()` combined-condition proof from the narrower live reconnect + bgapi/event combined-condition harness
+- Public API, lifecycle, and stability docs now explicitly defer live pending-`bgapi()` in-flight reconnect fault injection unless a lab provides a safe long-running background job command
+
 ## [0.2.5] - 2026-04-17
 
 ### Added

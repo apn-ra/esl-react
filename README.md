@@ -508,13 +508,37 @@ remain `Authenticated`/`Active`/live without false reconnect, drain, closed, or
 failed markers during the activity. It has been exercised successfully against
 a real FreeSWITCH target in an opt-in lab environment.
 
-Combined-condition runner coverage is deterministic in this checkpoint: the
-fake-server suite now covers pending `bgapi()` plus desired event subscriptions
+An opt-in live runner reconnect + bgapi/event harness is available for labs
+that can safely automate transport disruption/restoration while also expecting
+a safe live event source and one low-risk background job command:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_RECONNECT_BGAPI_EVENT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_RECONNECT_DISRUPT_COMMAND='./scripts/disrupt-esl-path.sh' \
+ESL_REACT_LIVE_RECONNECT_RESTORE_COMMAND='./scripts/restore-esl-path.sh' \
+ESL_REACT_LIVE_RUNNER_RECONNECT_BGAPI_EVENT_NAME=HEARTBEAT \
+ESL_REACT_LIVE_RUNNER_RECONNECT_BGAPI_COMMAND=status \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerReconnectBgapiEventCompatibilityTest.php
+```
+
+This harness starts through the public runner seam, subscribes to the configured
+event plus `BACKGROUND_JOB`, observes a pre-fault live event, executes the
+configured disrupt/restore commands, asserts reconnect/no-drain lifecycle truth
+and desired subscription restoration, then observes a post-reconnect live event
+and completes one safe `bgapi()` job. It is intentionally opt-in because the
+disrupt/restore commands are target-specific lab controls.
+
+Combined-condition runner coverage remains broader deterministically: the
+fake-server suite covers pending `bgapi()` plus desired event subscriptions
 through unexpected reconnect, and pending `bgapi()` while heartbeat liveness
 degrades and recovers. Those tests assert no false drain, fail-closed new work
 while reconnecting, restored event flow after reconnect, and matching snapshot
-plus pushed lifecycle truth. Live combined-condition fault injection remains a
-later opt-in lab milestone.
+plus pushed lifecycle truth. Live pending-`bgapi()` in-flight fault injection
+remains deferred unless a lab provides a safe long-running background job.
 
 An additional opt-in live event receipt harness is available when a safe event source is expected:
 

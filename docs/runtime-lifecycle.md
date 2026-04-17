@@ -61,6 +61,13 @@ and pending `bgapi()` plus desired event subscriptions can survive unexpected
 reconnect before post-reconnect event and `BACKGROUND_JOB` traffic resolves the
 activity. During these paths, reconnect and degraded-not-live states remain
 distinct from explicit drain.
+An opt-in live runner harness can validate the narrower reconnect + bgapi/event
+combined path when the lab supplies safe transport disrupt/restore commands:
+pre-fault live event delivery, reconnect/no-drain observation, desired
+subscription restoration, post-reconnect event delivery, and post-reconnect
+`bgapi()` completion all on the same public runner handle. Live
+pending-`bgapi()` in-flight fault injection across reconnect remains deferred
+unless a lab provides a safe long-running background job command.
 Heartbeat/liveness degradation is regression-tested deterministically on the
 runner seam and can also be exercised by an opt-in live harness on relatively
 quiet targets, where the expected path is `Authenticated/live` ->
