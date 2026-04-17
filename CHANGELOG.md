@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+Checkpoint release prep note for the next candidate after `v0.2.7`:
+[docs/release-prep-v0.2.8.md](docs/release-prep-v0.2.8.md)
+
 ### Added
 - Additive prepared-bootstrap replay-capture input contract so higher layers can inject runtime replay sinks on the runner seam without ad hoc `RuntimeConfig` wiring
 - Stable runner feedback snapshot packaging existing health truth with prepared runtime identity for downstream health/reporting integrations
@@ -17,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Runtime feedback now also exposes additive reconnect/backoff detail, including exact reconnect phase and attempt/delay truth plus conservative local next-due and remaining-delay timing estimates when a retry timer is pending
 - Runtime feedback now also exposes additive terminal reconnect-stop truth, including exact terminal-stop/exhaustion booleans plus conservative runtime-known stop categories such as explicit shutdown, retry exhaustion/disabled retry, auth rejection, and handshake failure
 - Runtime feedback now also retains additive terminal reconnect timing context, including exact terminal-stop and retry-attempt timestamps plus last retained scheduler timing, while keeping elapsed-stop duration explicitly derived from local wall-clock packaging
+- Release-facing docs and public-contract coverage now package the accumulated runner feedback surface more explicitly, including desired vs observed subscription wording, exact vs approximate vs derived reconnect timing semantics, and the stable read models/enums downstream consumers should type against
 
 ## [0.2.7] - 2026-04-17
 

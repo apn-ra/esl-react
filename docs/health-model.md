@@ -18,6 +18,13 @@ read model.
 That feedback surface also adds exact desired subscription/filter state and
 exact retry-scheduling truth that are specific to the package-owned runner
 integration seam.
+Release-facing semantic shorthand for that feedback surface:
+
+- exact: current runtime-owned truth or explicitly retained local scheduler state
+- approximate: local wall-clock/event-loop packaging that may drift slightly
+- derived: values computed from recorded timestamps at snapshot time
+- policy-derived: runtime policy decisions such as explicit shutdown or retry exhaustion
+- bounded runtime-known: only the failure categories the runtime can truly distinguish today
 
 ---
 
@@ -173,6 +180,8 @@ truth:
   the most recent reconnect attempt start, when one occurred
 - `lastScheduledRetryDueAtMicros` and `lastScheduledBackoffDelaySeconds` are
   the exact last retained scheduler values for retry timing context
+- `lastScheduledRetryDueAtMicros` is exact local scheduler state, but still
+  reflects the scheduled target rather than a hard real-time execution receipt
 - `terminalStoppedDurationSeconds` is a derived local elapsed duration since
   terminal stop and may drift slightly with wall-clock/event-loop timing
 

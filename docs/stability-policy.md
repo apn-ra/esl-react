@@ -51,6 +51,10 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeReconnectPhase`
+- `Apntalk\EslReact\Runner\RuntimeReconnectStopReason`
 - `Apntalk\EslReact\Runner\RuntimeRunnerState`
 - `Apntalk\EslReact\Runner\RuntimeSessionContext`
 

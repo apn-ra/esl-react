@@ -15,6 +15,7 @@ use Apntalk\EslReact\Runner\PreparedRuntimeInput;
 use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
 use Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot;
+use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
 use Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
 use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
@@ -106,6 +107,18 @@ final class PublicApiContractTest extends TestCase
     public function testRuntimeReconnectStopReasonIsStableEnumSurface(): void
     {
         self::assertTrue(enum_exists(RuntimeReconnectStopReason::class));
+    }
+
+    public function testRuntimeReconnectPhaseIsStableEnumSurface(): void
+    {
+        self::assertTrue(enum_exists(RuntimeReconnectPhase::class));
+    }
+
+    public function testRunnerFeedbackReadModelsRemainStablePublicSurface(): void
+    {
+        self::assertTrue(class_exists(RuntimeSubscriptionStateSnapshot::class));
+        self::assertTrue(class_exists(RuntimeObservedSubscriptionStateSnapshot::class));
+        self::assertTrue(class_exists(RuntimeReconnectStateSnapshot::class));
     }
 
     public function testAsyncEslRuntimeRunnerHasStableReturnType(): void

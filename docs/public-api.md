@@ -222,6 +222,9 @@ It packages:
 - endpoint identity
 - optional `RuntimeSessionContext`
 - the current `HealthSnapshot`
+- `RuntimeSubscriptionStateSnapshot` for exact desired subscription/filter state
+- `RuntimeObservedSubscriptionStateSnapshot` for conservative current-session observed-applied subscription/filter state
+- `RuntimeReconnectStateSnapshot` for reconnect/backoff and terminal reconnect-stop detail
 
 Helper methods expose the most common downstream reporting fields directly:
 
@@ -272,6 +275,111 @@ Current feedback semantics:
   - `authentication_rejected`
   - `handshake_timeout`
   - `handshake_protocol_failure`
+
+Safe release-facing consumption rules:
+
+- exact fields describe current runtime-owned truth or explicitly retained local scheduler state
+- approximate fields are local wall-clock packaging around event-loop scheduling and can drift slightly
+- derived fields are computed at snapshot time from exact retained timestamps plus the current local wall clock
+- policy-derived fields explain what the runtime policy decided, not a deeper transport/server diagnosis
+- bounded runtime-known fields describe only the failure categories the runtime can truly distinguish today
+- nothing on this surface should be interpreted as a full metrics stream, remote receipt ledger, or cross-process history
+
+### RuntimeSubscriptionStateSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot
+```
+
+Exact desired in-memory subscription/filter state for the current runtime
+instance.
+
+| Field | Meaning |
+|---|---|
+| `subscribeAll` | Exact desired "all events" intent |
+| `eventNames` | Exact desired named-event baseline when not using `subscribeAll` |
+| `filters` | Exact desired filter set tracked by the runtime |
+
+This is desired state only. It does not claim that the current remote session
+has already applied the same state.
+
+### RuntimeObservedSubscriptionStateSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot
+```
+
+Conservative locally observed-applied subscription/filter state for the current
+authenticated session.
+
+| Field | Meaning |
+|---|---|
+| `subscribeAll` | What the runtime believes it has applied for the current session |
+| `eventNames` | Conservative observed named-event state for the current session |
+| `filters` | Conservative observed filter state for the current session |
+| `isCurrentForActiveSession` | Whether this observed state is current for the active authenticated session |
+
+This surface resets on session loss/reconnect and rebuilds only after the
+restore path receives successful replies on the new session. It does not claim
+independent server-side acknowledgement beyond that.
+
+### RuntimeReconnectStateSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot
+```
+
+Stable reconnect/backoff and terminal reconnect-stop detail packaged from
+runtime-owned reconnect state plus local scheduler truth.
+
+Field categories:
+
+| Category | Fields |
+|---|---|
+| Exact | `phase`, `attemptNumber`, `isRetryScheduled`, `backoffDelaySeconds`, `isTerminallyStopped`, `isRetryExhausted`, `requiresExternalIntervention`, `isFailClosedTerminalState`, `terminalStoppedAtMicros`, `lastRetryAttemptStartedAtMicros`, `lastScheduledRetryDueAtMicros`, `lastScheduledBackoffDelaySeconds` |
+| Approximate local packaging | `nextRetryDueAtMicros`, `remainingDelaySeconds` |
+| Derived | `terminalStoppedDurationSeconds` |
+| Policy-derived / bounded runtime-known | `terminalStopReason` |
+
+`lastScheduledRetryDueAtMicros` is exact retained local scheduler state, but it
+still represents the scheduler target rather than a hard real-time execution
+receipt. Actual attempt execution may drift slightly around that target.
+
+### RuntimeReconnectPhase
+
+```
+Apntalk\EslReact\Runner\RuntimeReconnectPhase
+```
+
+Stable enum for reconnect phase packaging on the runner feedback surface.
+
+Current values:
+
+- `idle`
+- `waiting_to_retry`
+- `attempting_reconnect`
+- `restoring_session`
+- `exhausted`
+
+### RuntimeReconnectStopReason
+
+```
+Apntalk\EslReact\Runner\RuntimeReconnectStopReason
+```
+
+Stable conservative stop-reason enum for terminal reconnect states.
+
+Current values:
+
+- `explicit_shutdown`
+- `retry_exhausted`
+- `retry_disabled`
+- `authentication_rejected`
+- `handshake_timeout`
+- `handshake_protocol_failure`
+
+Use this enum as a bounded runtime-known or policy-derived category only. It is
+not a general transport diagnostics taxonomy.
 
 ### RuntimeRunnerInputInterface
 

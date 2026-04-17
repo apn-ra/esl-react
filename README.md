@@ -16,6 +16,9 @@ Current implementation status:
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`.
 - `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
+Release-prep note for the current accumulated runner-feedback checkpoint:
+[docs/release-prep-v0.2.8.md](docs/release-prep-v0.2.8.md)
+
 ---
 
 ## Package relationships
@@ -180,6 +183,34 @@ $input = new PreparedRuntimeBootstrapInput(
 $handle = AsyncEslRuntime::runner()->run($input, $loop);
 $feedback = $handle->feedbackSnapshot();
 ```
+
+### Runner feedback quick reference
+
+`RuntimeRunnerHandle::feedbackSnapshot()` is the stable release-facing read
+model for downstream health/reporting adapters that need more than the raw
+`HealthSnapshot`.
+
+```php
+$feedback = $handle->feedbackSnapshot();
+
+$desired = $feedback->subscriptionState();
+$observed = $feedback->observedSubscriptionState();
+$reconnect = $feedback->reconnectState();
+
+if ($reconnect->isTerminallyStopped) {
+    // conservative runtime-known terminal truth
+    $reason = $reconnect->terminalStopReason?->value;
+}
+```
+
+Safe consumption rules:
+
+- treat `subscriptionState()` as exact in-memory desired subscription/filter intent
+- treat `observedSubscriptionState()` as conservative current-session applied truth after successful local command replies, not as a deeper server receipt ledger
+- treat `reconnectState()->nextRetryDueAtMicros` and `remainingDelaySeconds` as local scheduler packaging that may drift slightly with event-loop latency
+- treat `reconnectState()->terminalStoppedDurationSeconds` as derived local elapsed time, not a persisted transition timestamp
+- treat `reconnectState()->terminalStopReason` as a bounded runtime-known or policy-derived category, not a general transport diagnostics framework
+- when `subscribeAll` is active, prefer `subscriptionState()->subscribeAll` or `observedSubscriptionState()->subscribeAll` over `activeSubscriptions()`, because the event-name list intentionally stays empty in that mode
 
 ---
 

@@ -93,6 +93,7 @@ Runner-facing reconnect detail semantics:
 - `reconnectState()->terminalStoppedAtMicros` is the exact recorded runtime transition time when reconnect became terminally stopped
 - `reconnectState()->lastRetryAttemptStartedAtMicros` is the exact recorded local timestamp for the most recent reconnect attempt start, when one occurred
 - `reconnectState()->lastScheduledRetryDueAtMicros` and `lastScheduledBackoffDelaySeconds` are the exact last retained scheduler values for retry timing context
+- `reconnectState()->lastScheduledRetryDueAtMicros` remains retained scheduler context even after a later explicit shutdown; it should be read as historical local retry context, not as proof that a timer is still pending
 - `reconnectState()->terminalStoppedDurationSeconds` is a derived local elapsed duration since terminal stop and may drift slightly with wall-clock/event-loop timing
 
 ---
