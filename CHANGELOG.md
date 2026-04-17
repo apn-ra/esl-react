@@ -6,14 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-04-17
+
 ### Added
 - Additive prepared dial-target runner input contract so richer prepared-bootstrap handoff can direct the prepared connector to non-default URIs, including TLS-style dial targets, for both startup and reconnect attempts without requiring direct `apntalk/esl-core` transport handoff
 - `RuntimeRunnerHandle::onLifecycleChange()` as a stable push-based companion to `lifecycleSnapshot()` for higher-layer lifecycle observation without polling
 - Opt-in live FreeSWITCH runner lifecycle harness for public runner startup, authenticated/live observation, explicit drain, and terminal closed-state verification
 - Opt-in automated live runner reconnect harness for public runner reconnect observation and recovery verification when the lab environment provides safe disrupt/restore commands
+- Deterministic runner-surface coverage for heartbeat first-miss liveness degradation and probe-driven recovery without false reconnect or drain observation
+- Opt-in live runner liveness harness for validating `Authenticated/live -> Authenticated/not-live -> Authenticated/live` observation on quiet targets
+- Deterministic runner-surface coverage for the second-miss heartbeat dead/reconnect path without false drain observation
+- Opt-in live runner heartbeat dead/reconnect harness for validating `Authenticated/live -> Authenticated/not-live -> Reconnecting/not-live -> Authenticated/live` against lab targets that can be safely paused and resumed
 
 ### Changed
 - Public runner docs now describe the live-verified milestone truthfully: runner startup/drain/closed behavior and automated reconnect recovery on the public runner seam have both been exercised against a real FreeSWITCH target in an opt-in lab environment
+- Runtime lifecycle docs now distinguish first-miss liveness degradation from the deeper second-miss heartbeat dead/reconnect path on both snapshot reads and push-based lifecycle callbacks
 
 ## [0.2.0] - 2026-04-17
 

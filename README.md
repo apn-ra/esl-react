@@ -366,6 +366,46 @@ Current liveness note:
 - If the liveness window expires again without recovery, the runtime closes the socket and falls into the normal disconnect/reconnect path.
 - This is a minimal heartbeat/liveness integration, not yet a broader orchestration layer.
 
+An additional opt-in live runner liveness harness is available for validating
+the public runner observation seam during heartbeat degradation:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_LIVENESS_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerLivenessCompatibilityTest.php
+```
+
+It uses short heartbeat settings against a relatively quiet live target and
+asserts `live -> degraded/not-live -> live` on the public runner lifecycle
+surface without reporting false reconnect or drain. This remains an opt-in lab
+validation path because the exact degradation window depends on the target's
+ambient inbound traffic.
+
+For labs that can safely make the ESL session go silent without immediately
+tearing down the TCP path, an additional opt-in live heartbeat dead/reconnect
+harness is available:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_HEARTBEAT_RECONNECT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_HEARTBEAT_DEADPATH_DISRUPT_COMMAND='./scripts/pause-esl-target.sh' \
+ESL_REACT_LIVE_HEARTBEAT_DEADPATH_RESTORE_COMMAND='./scripts/unpause-esl-target.sh' \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerHeartbeatReconnectCompatibilityTest.php
+```
+
+This harness asserts the deeper bounded heartbeat path on the public runner
+surface: `Authenticated/live -> Authenticated/not-live -> Reconnecting/not-live
+-> Authenticated/live`, while also verifying that heartbeat failure is not
+misreported as drain. It remains opt-in because the target must support a safe
+pause/resume-style disruption that leaves the connection silent long enough for
+the second miss to occur.
+
 ---
 
 ## Stability policy

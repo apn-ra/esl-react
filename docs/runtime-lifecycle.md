@@ -49,6 +49,16 @@ the final `Closed` state. Unexpected transport-loss reconnect recovery is also
 validated by an opt-in automated lab harness when the environment provides safe
 disruption and restore commands, alongside the existing manual live harnesses
 for staging paths where operator-driven disruption is still preferred.
+Heartbeat/liveness degradation is regression-tested deterministically on the
+runner seam and can also be exercised by an opt-in live harness on relatively
+quiet targets, where the expected path is `Authenticated/live` ->
+`Authenticated/not-live` -> `Authenticated/live` before any transport-loss
+reconnect becomes necessary.
+The deeper second-miss path is also regression-tested deterministically on the
+runner seam. When a lab target can be made silent without immediately closing
+the connection, an opt-in live harness can validate the expected sequence
+`Authenticated/live` -> `Authenticated/not-live` ->
+`Reconnecting/not-live` -> `Authenticated/live`.
 
 For richer prepared-bootstrap inputs, the prepared connector participates in
 the normal `ConnectionState` transitions because it supplies the live connection
@@ -65,6 +75,8 @@ Observation note for shutdown and reconnect:
 - Unexpected transport loss emits `Reconnecting` when supervision is active and
   only later returns to `Authenticated` on recovery or to `Disconnected` if
   retries are exhausted.
+- Heartbeat failure after the second consecutive missed liveness check also
+  enters the reconnect/disconnect path rather than the explicit drain path.
 - These remain distinct on both snapshot reads and pushed lifecycle callbacks.
 
 ---

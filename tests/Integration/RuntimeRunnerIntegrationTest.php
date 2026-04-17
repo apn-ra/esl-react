@@ -474,4 +474,226 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         $server->close();
     }
+
+    public function testRunnerLifecycleObservationReportsHeartbeatDegradationAndRecoveryWithoutFalseReconnect(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $this->loop->addTimer(0.03, function () use ($connection, $server): void {
+                $server->writeApiResponse($connection, "+OK liveness-recovered\n");
+            });
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::disabled(),
+                    heartbeat: HeartbeatConfig::withInterval(0.05, 0.01),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                return $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+                    && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
+                    && $handle->lifecycleSnapshot()->isLive() === false
+                    && array_filter(
+                        $markers,
+                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                            && $marker['session'] === 'active'
+                            && $marker['live'] === false
+                            && $marker['reconnecting'] === false
+                            && $marker['draining'] === false
+                            && $marker['stopped'] === false
+                    ) !== [];
+            },
+            0.2,
+        );
+
+        $degraded = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $degraded->runnerState);
+        self::assertSame(ConnectionState::Authenticated, $degraded->connectionState());
+        self::assertSame(SessionState::Active, $degraded->sessionState());
+        self::assertFalse($degraded->isLive());
+        self::assertFalse($degraded->isReconnecting());
+        self::assertFalse($degraded->isDraining());
+        self::assertFalse($degraded->isStopped());
+        self::assertNotNull($degraded->lastHeartbeatAtMicros());
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                return $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+                    && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
+                    && $handle->lifecycleSnapshot()->isLive()
+                    && count(array_filter(
+                        $markers,
+                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                            && $marker['session'] === 'active'
+                            && $marker['live'] === true
+                            && $marker['reconnecting'] === false
+                            && $marker['draining'] === false
+                            && $marker['stopped'] === false
+                    )) >= 2;
+            },
+            0.3,
+        );
+
+        $recovered = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $recovered->runnerState);
+        self::assertSame(ConnectionState::Authenticated, $recovered->connectionState());
+        self::assertSame(SessionState::Active, $recovered->sessionState());
+        self::assertTrue($recovered->isLive());
+        self::assertFalse($recovered->isReconnecting());
+        self::assertFalse($recovered->isDraining());
+        self::assertFalse($recovered->isStopped());
+
+        self::assertSame([], array_filter(
+            $markers,
+            static fn (array $marker): bool => $marker['reconnecting'] === true
+                || $marker['connection'] === 'reconnecting'
+                || $marker['draining'] === true
+                || $marker['connection'] === 'draining'
+        ));
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
+    public function testRunnerLifecycleObservationReportsHeartbeatDeadPathReconnectAndRecoveryWithoutFalseDrain(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command): void {
+            self::assertSame('api status', $command);
+            // Leave the first probe unanswered so the second miss forces a recoverable close.
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $server->writeApiResponse($connection, "+OK after-heartbeat-dead-recover\n");
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                    heartbeat: HeartbeatConfig::withInterval(0.05, 0.01),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                return $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+                    && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
+                    && $handle->lifecycleSnapshot()->isLive() === false
+                    && array_filter(
+                        $markers,
+                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                            && $marker['session'] === 'active'
+                            && $marker['live'] === false
+                            && $marker['reconnecting'] === false
+                            && $marker['draining'] === false
+                            && $marker['stopped'] === false
+                    ) !== [];
+            },
+            0.2,
+        );
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                return array_filter(
+                    $markers,
+                    static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                        && $marker['session'] === 'disconnected'
+                        && $marker['live'] === false
+                        && $marker['reconnecting'] === true
+                        && $marker['draining'] === false
+                        && $marker['stopped'] === false
+                ) !== [];
+            },
+            0.2,
+        );
+
+        $recovering = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $recovering->runnerState);
+        self::assertSame(ConnectionState::Reconnecting, $recovering->connectionState());
+        self::assertSame(SessionState::Disconnected, $recovering->sessionState());
+        self::assertFalse($recovering->isLive());
+        self::assertTrue($recovering->isReconnecting());
+        self::assertFalse($recovering->isDraining());
+        self::assertFalse($recovering->isStopped());
+
+        $this->waitUntil(
+            function () use ($handle, &$markers): bool {
+                return $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+                    && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
+                    && $handle->lifecycleSnapshot()->isLive()
+                    && count(array_filter(
+                        $markers,
+                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                            && $marker['session'] === 'active'
+                            && $marker['live'] === true
+                            && $marker['reconnecting'] === false
+                            && $marker['draining'] === false
+                            && $marker['stopped'] === false
+                    )) >= 2;
+            },
+            0.4,
+        );
+
+        $recovered = $handle->lifecycleSnapshot();
+        self::assertSame(RuntimeRunnerState::Running, $recovered->runnerState);
+        self::assertSame(ConnectionState::Authenticated, $recovered->connectionState());
+        self::assertSame(SessionState::Active, $recovered->sessionState());
+        self::assertTrue($recovered->isLive());
+        self::assertFalse($recovered->isReconnecting());
+        self::assertFalse($recovered->isDraining());
+        self::assertFalse($recovered->isStopped());
+
+        self::assertSame([], array_filter(
+            $markers,
+            static fn (array $marker): bool => $marker['draining'] === true
+                || $marker['connection'] === 'draining'
+        ));
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
 }
