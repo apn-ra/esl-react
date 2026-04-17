@@ -130,6 +130,7 @@ Current runner truth:
 - Ongoing runtime lifecycle remains visible through the stable client health model (`ConnectionState`, `SessionState`, `HealthSnapshot`).
 - `PreparedRuntimeInput` preserves the config-driven path for simple adapters.
 - `PreparedRuntimeBootstrapInput` supports a richer handoff with a prepared ReactPHP `ConnectorInterface`, prepared `InboundPipelineInterface`, and runtime-local `RuntimeSessionContext`.
+- `PreparedRuntimeBootstrapInput` can also carry an explicit prepared dial target URI, so higher layers may reuse the prepared connector path for non-default schemes such as `tls://...` without moving runtime ownership out of `esl-react`.
 - The prepared connector is used for live startup and reconnect attempts. This lets higher layers prepare transport access without making `esl-react` own their control plane.
 - The prepared pipeline is accepted and reset as part of the runner handoff lifecycle, but decoded-pipeline routing is not active yet. The current live protocol loop still uses the existing frame pump/router path.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and full replacement of the live ingress router with `InboundPipelineInterface` remain deferred.
@@ -152,6 +153,7 @@ $input = new PreparedRuntimeBootstrapInput(
         sessionId: 'worker-session-123',
         metadata: ['pbx_node' => 'node-a'],
     ),
+    dialUri: 'tls://pbx.example.test:7443',
 );
 
 $handle = AsyncEslRuntime::runner()->run($input, $loop);

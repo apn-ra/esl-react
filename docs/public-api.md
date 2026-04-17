@@ -152,6 +152,7 @@ Current runner notes:
 - The returned handle exposes `lifecycleSnapshot()` for higher layers that need read-only startup + live runtime observation without taking runtime ownership.
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
 - Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
+- `PreparedRuntimeDialTargetInputInterface` additively allows richer prepared-bootstrap inputs to override the dial target URI used by the prepared connector for startup and reconnect attempts.
 - Ongoing runtime lifecycle after startup remains on the stable client/health surface rather than a second parallel runner control plane.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and decoded `InboundPipelineInterface` routing are not part of this runner-input expansion.
 
@@ -223,8 +224,28 @@ Current bootstrap-input notes:
 - The prepared connector is consumed by the live runtime core instead of the default `React\Socket\Connector`.
 - The prepared pipeline is accepted and reset by the runner handoff lifecycle, but the current live ingress path still routes through the existing frame pump/router.
 - The session context is exposed on `RuntimeRunnerHandle` for runtime identity correlation. It must not carry Laravel control-plane ownership or worker assignment policy.
+- Without an additive dial-target override, the prepared connector dials `RuntimeConfig::connectionUri()`.
 
 `PreparedRuntimeBootstrapInput` is the provided immutable implementation for this richer path.
+
+### PreparedRuntimeDialTargetInputInterface
+
+```
+Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface
+```
+
+Additive prepared-bootstrap contract for higher layers that need the prepared
+connector to dial a URI other than `RuntimeConfig::connectionUri()`.
+
+| Method | Return type | Description |
+|---|---|---|
+| `dialUri()` | `string` | Dial target URI used by the prepared connector for startup and reconnect attempts |
+
+Current dial-target notes:
+
+- This is intended for richer ReactPHP connector handoff, including non-default dial schemes such as `tls://...`.
+- The dial target is transport/bootstrap input only. It does not replace the higher-layer `endpoint()` identity surface.
+- Direct polling handoff of `apntalk/esl-core` `TransportInterface` remains deferred.
 
 ---
 
@@ -391,6 +412,9 @@ Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput
 ```
 
 Immutable implementation of `PreparedRuntimeBootstrapInputInterface`.
+It also implements `PreparedRuntimeDialTargetInputInterface`; `dialUri()`
+defaults to `RuntimeConfig::connectionUri()` when no explicit override is
+provided.
 
 ### RuntimeSessionContext
 

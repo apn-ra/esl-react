@@ -5,6 +5,7 @@ namespace Apntalk\EslReact\Tests\Contract;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
@@ -63,5 +64,11 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(is_a(PreparedRuntimeBootstrapInputInterface::class, RuntimeRunnerInputInterface::class, true));
         self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeBootstrapInputInterface::class, true));
+    }
+
+    public function testPreparedRuntimeDialTargetInputIsAdditiveBootstrapContract(): void
+    {
+        self::assertTrue(is_a(PreparedRuntimeDialTargetInputInterface::class, PreparedRuntimeBootstrapInputInterface::class, true));
+        self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeDialTargetInputInterface::class, true));
     }
 }

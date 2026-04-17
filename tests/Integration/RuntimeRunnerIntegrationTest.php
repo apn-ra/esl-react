@@ -134,11 +134,12 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             connector: $connector,
             inboundPipeline: $pipeline,
             sessionContext: $context,
+            dialUri: 'tls://pbx.example.test:7443',
         );
 
         $handle = AsyncEslRuntime::runner()->run($input, $this->loop);
 
-        self::assertSame(['tcp://config-only.invalid:65000'], $connector->requestedUris);
+        self::assertSame(['tls://pbx.example.test:7443'], $connector->requestedUris);
         self::assertSame(0, $pipeline->bufferedByteCount());
         self::assertSame($context, $handle->sessionContext());
 
@@ -150,6 +151,72 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertInstanceOf(ApiReply::class, $reply);
         self::assertSame("+OK prepared-bootstrap\n", $reply->body());
 
+        $server->close();
+    }
+
+    public function testRunnerReusesPreparedDialUriForReconnectAttempts(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+            /** @var list<string> */
+            public array $requestedUris = [];
+
+            public function __construct(
+                private readonly LoopInterface $loop,
+                private readonly string $targetUri,
+            ) {}
+
+            public function connect($uri)
+            {
+                $this->requestedUris[] = (string) $uri;
+
+                return (new Connector([], $this->loop))->connect($this->targetUri);
+            }
+        };
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: 'worker://node-a/session-1',
+                runtimeConfig: RuntimeConfig::create(
+                    host: 'config-only.invalid',
+                    port: 65000,
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.05),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+                connector: $connector,
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext('runner-session-2'),
+                dialUri: 'tls://pbx.example.test:7443',
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            fn (): bool => count($connector->requestedUris) >= 2
+                && $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated,
+            0.5,
+        );
+
+        self::assertSame(
+            ['tls://pbx.example.test:7443', 'tls://pbx.example.test:7443'],
+            array_slice($connector->requestedUris, 0, 2),
+        );
+
+        $this->await($handle->client()->disconnect());
         $server->close();
     }
 

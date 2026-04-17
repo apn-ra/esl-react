@@ -21,6 +21,7 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Contracts\RuntimeRunnerInterface`
 - `Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface`
 - `Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface`
+- `Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface`
 
 ### Entry point
 

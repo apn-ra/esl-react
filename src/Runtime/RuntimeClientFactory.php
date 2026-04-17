@@ -41,6 +41,7 @@ final class RuntimeClientFactory
         RuntimeConfig $config,
         LoopInterface $loop,
         ?ConnectorInterface $connector = null,
+        ?string $connectionUri = null,
     ): AsyncEslClientInterface {
         /** @var RuntimeClient|null $client */
         $client = null;
@@ -124,6 +125,7 @@ final class RuntimeClientFactory
             config: $config,
             loop: $loop,
             connector: $connector ?? new Connector([], $loop),
+            connectionUri: $connectionUri ?? $config->connectionUri(),
             envelopePump: new EnvelopePump(new FrameReader(new FrameParser())),
             router: new InboundMessageRouter(new InboundMessageClassifier()),
             outbound: $outbound,

@@ -69,6 +69,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         private readonly RuntimeConfig $config,
         private readonly LoopInterface $loop,
         private readonly ConnectorInterface $connector,
+        private readonly string $connectionUri,
         private readonly EnvelopePump $envelopePump,
         private readonly InboundMessageRouter $router,
         private readonly OutboundMessageDispatcher $outbound,
@@ -598,7 +599,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->livenessState = LivenessState::Dead;
         $this->cancelConnectTimeout();
         $this->startConnectTimeout();
-        $this->connector->connect($this->config->connectionUri())->then(
+        $this->connector->connect($this->connectionUri)->then(
             function (ConnectionInterface $connection): void {
                 if ($this->connectionState === ConnectionState::Closed || !$this->supervisionEnabled) {
                     $connection->close();
@@ -610,7 +611,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             function (\Throwable $e): void {
                 $this->cancelConnectTimeout();
                 $error = new ConnectionException(
-                    sprintf('Failed to connect to %s: %s', $this->config->connectionUri(), $e->getMessage()),
+                    sprintf('Failed to connect to %s: %s', $this->connectionUri, $e->getMessage()),
                     0,
                     $e,
                 );

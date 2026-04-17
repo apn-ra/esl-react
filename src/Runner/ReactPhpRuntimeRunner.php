@@ -3,6 +3,7 @@
 namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslReact\AsyncEslRuntime;
+use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
@@ -20,7 +21,12 @@ final class ReactPhpRuntimeRunner implements RuntimeRunnerInterface
             $loop ??= Loop::get();
             $input->inboundPipeline()->reset();
             $sessionContext = $input->sessionContext();
-            $client = RuntimeClientFactory::make($input->runtimeConfig(), $loop, $input->connector());
+            $client = RuntimeClientFactory::make(
+                config: $input->runtimeConfig(),
+                loop: $loop,
+                connector: $input->connector(),
+                connectionUri: $input instanceof PreparedRuntimeDialTargetInputInterface ? $input->dialUri() : null,
+            );
         } else {
             $client = AsyncEslRuntime::make($input->runtimeConfig(), $loop);
         }

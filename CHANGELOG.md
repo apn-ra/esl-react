@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Additive prepared dial-target runner input contract so richer prepared-bootstrap handoff can direct the prepared connector to non-default URIs, including TLS-style dial targets, for both startup and reconnect attempts without requiring direct `apntalk/esl-core` transport handoff
+
 ## [0.2.0] - 2026-04-17
 
 ### Added

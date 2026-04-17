@@ -39,6 +39,9 @@ the normal `ConnectionState` transitions because it supplies the live connection
 for startup and reconnect attempts. The prepared ingress pipeline is reset as
 part of runner handoff consumption, but decoded-pipeline routing is not yet the
 live ingress path.
+When the richer input also implements the additive prepared dial-target
+contract, that same explicit dial URI is reused for both startup and reconnect
+attempts instead of forcing `RuntimeConfig::connectionUri()`.
 
 ---
 
