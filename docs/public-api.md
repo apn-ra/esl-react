@@ -5,6 +5,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
 Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
+It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals.
 
 ---
 
@@ -20,6 +21,16 @@ AsyncEslRuntime::make(
 `AsyncEslRuntime` is the only supported way to construct a runtime instance. The returned value is typed as `AsyncEslClientInterface`; do not rely on the concrete class.
 
 If `$loop` is `null`, the global `React\EventLoop\Loop::get()` instance is used. Pass an explicit loop when integrating into an existing application.
+
+### Runner entry point
+
+```php
+AsyncEslRuntime::runner(): \Apntalk\EslReact\Contracts\RuntimeRunnerInterface
+```
+
+Returns the stable runner contract for the first live prepared-input milestone.
+Consumers should type against `RuntimeRunnerInterface`, not against the concrete
+runner class.
 
 ---
 
@@ -123,6 +134,61 @@ Current health notes:
 - `snapshot()->pendingBgapiJobCount` includes jobs that are still pending across an unexpected reconnect.
 - `snapshot()->totalInflightCount` is the runtime-wide accepted work count used by overload and drain decisions.
 - `snapshot()->isOverloaded` reflects whether new work would currently be rejected for backpressure reasons.
+
+### RuntimeRunnerInterface
+
+```
+Apntalk\EslReact\Contracts\RuntimeRunnerInterface
+```
+
+| Method | Return type | Description |
+|---|---|---|
+| `run(RuntimeRunnerInputInterface $input, ?LoopInterface $loop = null)` | `RuntimeRunnerHandle` | Start the live runtime from prepared runtime-owned input and return a startup handle |
+
+Current runner notes:
+
+- `run()` starts the live runtime immediately by delegating to the existing `connect()` path.
+- The returned handle exposes `startupPromise()` plus a coarse startup state model.
+- Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
+- Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
+- Ongoing runtime lifecycle after startup remains on the stable client/health surface rather than a second parallel runner control plane.
+- Direct polling of `apntalk/esl-core` `TransportInterface` and decoded `InboundPipelineInterface` routing are not part of this runner-input expansion.
+
+### RuntimeRunnerInputInterface
+
+```
+Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface
+```
+
+| Method | Return type | Description |
+|---|---|---|
+| `endpoint()` | `string` | Higher-layer endpoint identity for the prepared runtime input |
+| `runtimeConfig()` | `RuntimeConfig` | Runtime-owned config used for the live `esl-react` start path |
+
+`PreparedRuntimeInput` is the provided immutable implementation for the first pass.
+
+### PreparedRuntimeBootstrapInputInterface
+
+```
+Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface
+```
+
+Additive richer runner input contract. It extends `RuntimeRunnerInputInterface`
+and preserves the config-driven path.
+
+| Method | Return type | Description |
+|---|---|---|
+| `connector()` | `ConnectorInterface` | Prepared ReactPHP transport connector used for startup and reconnect attempts |
+| `inboundPipeline()` | `InboundPipelineInterface` | Prepared `esl-core` ingress pipeline associated with this handoff |
+| `sessionContext()` | `RuntimeSessionContext` | Runtime-local session identity and scalar metadata |
+
+Current bootstrap-input notes:
+
+- The prepared connector is consumed by the live runtime core instead of the default `React\Socket\Connector`.
+- The prepared pipeline is accepted and reset by the runner handoff lifecycle, but the current live ingress path still routes through the existing frame pump/router.
+- The session context is exposed on `RuntimeRunnerHandle` for runtime identity correlation. It must not carry Laravel control-plane ownership or worker assignment policy.
+
+`PreparedRuntimeBootstrapInput` is the provided immutable implementation for this richer path.
 
 ---
 
@@ -258,6 +324,47 @@ Apntalk\EslReact\Bgapi\BgapiJobHandle
 | `jobUuid()` | `string` | The FreeSWITCH Job-UUID after ack; empty string before acceptance is observed |
 | `eslCommand()` | `string` | The bgapi command verb |
 | `eslArgs()` | `string` | The bgapi command arguments |
+
+### RuntimeRunnerHandle
+
+```
+Apntalk\EslReact\Runner\RuntimeRunnerHandle
+```
+
+| Method | Return type | Description |
+|---|---|---|
+| `endpoint()` | `string` | Prepared endpoint identity passed to the runner |
+| `client()` | `AsyncEslClientInterface` | Stable async runtime facade |
+| `startupPromise()` | `PromiseInterface<void>` | Promise for the initial live runtime startup |
+| `state()` | `RuntimeRunnerState` | Coarse startup lifecycle state |
+| `startupError()` | `?\Throwable` | Startup failure if the initial connect/auth path failed |
+| `sessionContext()` | `?RuntimeSessionContext` | Runtime-local session context when startup used a prepared-bootstrap input |
+
+### RuntimeRunnerState
+
+```
+Apntalk\EslReact\Runner\RuntimeRunnerState
+```
+
+Backed enum. Values: `Starting`, `Running`, `Failed`.
+
+### PreparedRuntimeBootstrapInput
+
+```
+Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput
+```
+
+Immutable implementation of `PreparedRuntimeBootstrapInputInterface`.
+
+### RuntimeSessionContext
+
+```
+Apntalk\EslReact\Runner\RuntimeSessionContext
+```
+
+Small runtime-local identity DTO for runner handoff correlation. It carries a
+non-empty `sessionId` plus scalar-or-null metadata. It is not a control-plane,
+assignment, or operator-surface model.
 | `dispatchedAtMicros()` | `float` | Local dispatch timestamp |
 | `promise()` | `PromiseInterface<BackgroundJobEvent>` | Resolves on matching completion; rejects on ack timeout, orphan timeout, or terminal shutdown |
 

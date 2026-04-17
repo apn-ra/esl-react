@@ -18,10 +18,14 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Contracts\EventStreamInterface`
 - `Apntalk\EslReact\Contracts\SubscriptionManagerInterface`
 - `Apntalk\EslReact\Contracts\HealthReporterInterface`
+- `Apntalk\EslReact\Contracts\RuntimeRunnerInterface`
+- `Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface`
+- `Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface`
 
 ### Entry point
 
 - `Apntalk\EslReact\AsyncEslRuntime::make(RuntimeConfig $config, ?LoopInterface $loop = null): AsyncEslClientInterface`
+- `Apntalk\EslReact\AsyncEslRuntime::runner(): RuntimeRunnerInterface`
 
 ### Config objects
 
@@ -38,6 +42,11 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Connection\ConnectionState`
 - `Apntalk\EslReact\Session\SessionState`
 - `Apntalk\EslReact\Bgapi\BgapiJobHandle`
+- `Apntalk\EslReact\Runner\PreparedRuntimeInput`
+- `Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput`
+- `Apntalk\EslReact\Runner\RuntimeRunnerHandle`
+- `Apntalk\EslReact\Runner\RuntimeRunnerState`
+- `Apntalk\EslReact\Runner\RuntimeSessionContext`
 
 ### Exceptions
 

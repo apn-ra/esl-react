@@ -3,7 +3,12 @@
 namespace Apntalk\EslReact\Tests\Contract;
 
 use Apntalk\EslReact\AsyncEslRuntime;
+use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
+use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
+use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
+use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
+use Apntalk\EslReact\Runner\PreparedRuntimeInput;
 use PHPUnit\Framework\TestCase;
 
 final class PublicApiContractTest extends TestCase
@@ -20,5 +25,30 @@ final class PublicApiContractTest extends TestCase
 
         self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
         self::assertSame(AsyncEslClientInterface::class, $returnType->getName());
+    }
+
+    public function testRuntimeRunnerContractExposesRunMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeRunnerInterface::class, 'run'));
+    }
+
+    public function testAsyncEslRuntimeRunnerHasStableReturnType(): void
+    {
+        $method = new \ReflectionMethod(AsyncEslRuntime::class, 'runner');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeRunnerInterface::class, $returnType->getName());
+    }
+
+    public function testPreparedRuntimeInputImplementsRunnerInputContract(): void
+    {
+        self::assertTrue(is_a(PreparedRuntimeInput::class, RuntimeRunnerInputInterface::class, true));
+    }
+
+    public function testPreparedRuntimeBootstrapInputIsAdditiveRunnerInputContract(): void
+    {
+        self::assertTrue(is_a(PreparedRuntimeBootstrapInputInterface::class, RuntimeRunnerInputInterface::class, true));
+        self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeBootstrapInputInterface::class, true));
     }
 }

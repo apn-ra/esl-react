@@ -15,6 +15,28 @@ Hardening note for the implemented slice:
 
 The runtime maintains two parallel state machines: `ConnectionState` and `SessionState`. They are related but distinct. A connection can be `Authenticated` (ConnectionState) while the session is `Active` (SessionState) — both must be healthy for the runtime to be fully operational.
 
+The prepared-input runner seam also exposes a coarse `RuntimeRunnerState` model.
+It is intentionally smaller than the ongoing runtime lifecycle model and exists
+only to describe the initial runner startup path for both config-driven inputs
+and richer prepared-bootstrap inputs:
+
+```
+Starting
+  -> Running              on successful initial connect/auth
+  -> Failed               on initial connect/auth failure
+```
+
+After `RuntimeRunnerState` reaches `Running`, ongoing lifecycle truth remains on
+the stable runtime state surfaces: `ConnectionState`, `SessionState`, and
+`HealthSnapshot`. This avoids creating a second competing control-plane model in
+`esl-react`.
+
+For richer prepared-bootstrap inputs, the prepared connector participates in
+the normal `ConnectionState` transitions because it supplies the live connection
+for startup and reconnect attempts. The prepared ingress pipeline is reset as
+part of runner handoff consumption, but decoded-pipeline routing is not yet the
+live ingress path.
+
 ---
 
 ## ConnectionState
