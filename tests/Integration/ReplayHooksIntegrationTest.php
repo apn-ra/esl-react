@@ -12,9 +12,12 @@ use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\BackpressureException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Exceptions\DrainException;
+use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
+use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
 use Apntalk\EslReact\Tests\Support\CollectingReplaySink;
+use React\Socket\Connector;
 
 final class ReplayHooksIntegrationTest extends AsyncTestCase
 {
@@ -48,6 +51,57 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         self::assertSame('ApiReply', $captured[1]->capturedName());
         self::assertSame('authenticated', $captured[1]->derivedMetadata()['runtime-connection-state']);
         self::assertSame('1', $captured[1]->derivedMetadata()['runtime-connection-generation']);
+
+        $server->close();
+    }
+
+    public function testPreparedBootstrapReplayInjectionAddsStableIdentityMetadata(): void
+    {
+        $sink = new CollectingReplaySink();
+        $server = $this->authenticatedServer();
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $server->writeApiResponse($connection, "+OK still-alive\n");
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: 'worker://node-a/runtime-1',
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                ),
+                connector: new Connector([], $this->loop),
+                inboundPipeline: new \Apntalk\EslCore\Inbound\InboundPipeline(),
+                sessionContext: new RuntimeSessionContext(
+                    'runtime-session-1',
+                    metadata: ['pbx_node' => 'node-a'],
+                    workerSessionId: 'worker-session-1',
+                    connectionProfile: 'profile-a',
+                    providerIdentity: 'provider-a',
+                    connectorIdentity: 'connector-a',
+                ),
+                replayCaptureSinksOverride: [$sink],
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+        $sink->reset();
+
+        $reply = $this->await($handle->client()->api('status'));
+
+        self::assertSame("+OK still-alive\n", $reply->body());
+        self::assertCount(2, $sink->captured());
+        self::assertSame('api.dispatch', $sink->captured()[0]->derivedMetadata()['replay-artifact-name']);
+        self::assertSame('1', $sink->captured()[0]->derivedMetadata()['replay-artifact-version']);
+        self::assertSame('runtime-session-1', $sink->captured()[0]->derivedMetadata()['runtime_session_id']);
+        self::assertSame('worker-session-1', $sink->captured()[0]->derivedMetadata()['worker_session_id']);
+        self::assertSame('profile-a', $sink->captured()[0]->derivedMetadata()['connection_profile']);
+        self::assertSame('provider-a', $sink->captured()[0]->derivedMetadata()['provider_identity']);
+        self::assertSame('connector-a', $sink->captured()[0]->derivedMetadata()['connector_identity']);
+        self::assertSame('node-a', $sink->captured()[0]->derivedMetadata()['pbx_node']);
 
         $server->close();
     }

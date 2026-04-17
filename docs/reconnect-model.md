@@ -4,7 +4,7 @@
 
 Reconnect is supervised by internal runtime components. When a live connection drops unexpectedly, or when a supervised TCP connect attempt fails, the runtime schedules retry attempts according to `RetryPolicy`.
 
-Consumers configure retry behavior through `RetryPolicy` in `RuntimeConfig`. Consumers observe its effects through `ConnectionState`, `HealthSnapshot::$reconnectAttempts`, and the eventual resolution or rejection of the `connect()` promise.
+Consumers configure retry behavior through `RetryPolicy` in `RuntimeConfig`. Consumers observe its effects through `ConnectionState`, `HealthSnapshot::$reconnectAttempts`, `RuntimeRunnerHandle::feedbackSnapshot()->reconnectState()`, and the eventual resolution or rejection of the `connect()` promise.
 
 ---
 
@@ -49,6 +49,19 @@ Before scheduling a reconnect, the runtime classifies the failure:
 
 Intentional shutdowns and non-retryable handshake/auth failures bypass the retry schedule entirely.
 
+Terminal stop reasons currently exposed on the runner feedback surface:
+
+- `explicit_shutdown`
+- `retry_exhausted`
+- `retry_disabled`
+- `authentication_rejected`
+- `handshake_timeout`
+- `handshake_protocol_failure`
+
+The first three are policy-derived/runtime-owned categories. The latter three
+reflect the bounded handshake/auth failure modes the runtime can truly
+distinguish today. Anything deeper remains out of scope for this package.
+
 ---
 
 ## Retry sequence
@@ -64,6 +77,23 @@ When a network error disconnect is classified:
 7. If `maxAttempts` is reached and the attempt fails, `ConnectionState` transitions to `Disconnected` and no further retries occur.
 
 The `connect()` promise (if the caller is still awaiting it) does not reject during intermediate retries. It rejects only when `maxAttempts` is exhausted or a non-retryable failure occurs.
+
+Runner-facing reconnect detail semantics:
+
+- `reconnectState()->phase` is exact runtime-owned reconnect phase truth
+- `reconnectState()->attemptNumber` is exact for the scheduled or active reconnect attempt while recovery is underway
+- `reconnectState()->isRetryScheduled` is exact local scheduler truth
+- `reconnectState()->backoffDelaySeconds` is exact for the current scheduled or active reconnect attempt
+- `reconnectState()->nextRetryDueAtMicros` and `remainingDelaySeconds` are local scheduler estimates and may drift slightly with event-loop execution latency
+- `reconnectState()->isTerminallyStopped` is exact runtime-owned truth for when autonomous reconnect has stopped permanently
+- `reconnectState()->isRetryExhausted` is exact bounded-retry exhaustion truth
+- `reconnectState()->requiresExternalIntervention` is exact for whether recovery now needs explicit caller action or runtime replacement
+- `reconnectState()->isFailClosedTerminalState` is exact runtime-owned truth for fail-closed terminal outcomes and remains `false` for explicit shutdown
+- `reconnectState()->terminalStopReason` is a conservative runtime-known category, not a deeper transport diagnosis framework
+- `reconnectState()->terminalStoppedAtMicros` is the exact recorded runtime transition time when reconnect became terminally stopped
+- `reconnectState()->lastRetryAttemptStartedAtMicros` is the exact recorded local timestamp for the most recent reconnect attempt start, when one occurred
+- `reconnectState()->lastScheduledRetryDueAtMicros` and `lastScheduledBackoffDelaySeconds` are the exact last retained scheduler values for retry timing context
+- `reconnectState()->terminalStoppedDurationSeconds` is a derived local elapsed duration since terminal stop and may drift slightly with wall-clock/event-loop timing
 
 ---
 

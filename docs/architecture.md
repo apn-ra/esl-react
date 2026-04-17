@@ -93,6 +93,15 @@ Reconnect uses `RetryPolicy` for bounded retry/backoff. Liveness is intentionall
 
 Builds point-in-time health snapshots exposing connection/session state, liveness, reconnect attempts, active subscriptions, accepted-work counts, overload state, drain state, and the last recorded error.
 
+`RuntimeRunnerHandle`, `RuntimeLifecycleSnapshot`, `RuntimeFeedbackSnapshot`, `RuntimeSessionContext`
+
+Package the stable runner-facing integration seams. `RuntimeLifecycleSnapshot`
+is the coarse lifecycle observation surface; `RuntimeFeedbackSnapshot` packages
+the existing health truth with prepared runtime identity for downstream
+health/reporting adapters; `RuntimeSessionContext` carries bounded generic
+runtime/session identity without importing framework-specific control-plane
+concepts.
+
 ### Bgapi tracking
 
 `BgapiDispatcher`, `BgapiJobTracker`, `PendingBgapiJob`
@@ -104,6 +113,9 @@ Returns a tracked handle immediately, assigns `Job-UUID` on ack, correlates `BAC
 `RuntimeReplayCapture`
 
 Observes accepted dispatch, replies, inbound events, and bgapi lifecycle points, then emits replay-safe envelopes to configured sinks. This is a hook emission layer only; it is not storage, replay execution, or a control plane.
+Prepared-bootstrap inputs may inject replay capture explicitly on the runner
+seam while still reusing the stable `ReplayCaptureSinkInterface` contract from
+`apntalk/esl-core`.
 
 ---
 

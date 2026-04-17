@@ -3,7 +3,9 @@
 namespace Apntalk\EslReact\Tests\Unit\Runner;
 
 use Apntalk\EslCore\Contracts\InboundPipelineInterface;
+use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslReact\Config\RuntimeConfig;
+use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use PHPUnit\Framework\TestCase;
@@ -52,6 +54,59 @@ final class PreparedRuntimeBootstrapInputTest extends TestCase
             inboundPipeline: $this->createMock(InboundPipelineInterface::class),
             sessionContext: new RuntimeSessionContext('runner-session-1'),
             dialUri: '',
+        );
+    }
+
+    public function testPreparedBootstrapInputImplementsReplayCaptureContractAndDefaultsToRuntimeConfig(): void
+    {
+        $sink = $this->createMock(ReplayCaptureSinkInterface::class);
+        $input = new PreparedRuntimeBootstrapInput(
+            endpoint: 'worker://node-a/session-1',
+            runtimeConfig: RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: 9090,
+                password: 'ClueCon',
+                replayCaptureEnabled: true,
+                replayCaptureSinks: [$sink],
+            ),
+            connector: $this->createMock(ConnectorInterface::class),
+            inboundPipeline: $this->createMock(InboundPipelineInterface::class),
+            sessionContext: new RuntimeSessionContext('runner-session-1'),
+        );
+
+        self::assertInstanceOf(PreparedRuntimeReplayCaptureInputInterface::class, $input);
+        self::assertTrue($input->replayCaptureEnabled());
+        self::assertSame([$sink], $input->replayCaptureSinks());
+    }
+
+    public function testPreparedBootstrapInputAllowsReplayCaptureOverrideWithoutTouchingRuntimeConfig(): void
+    {
+        $sink = $this->createMock(ReplayCaptureSinkInterface::class);
+        $input = new PreparedRuntimeBootstrapInput(
+            endpoint: 'worker://node-a/session-1',
+            runtimeConfig: RuntimeConfig::create(host: '127.0.0.1', port: 9090, password: 'ClueCon'),
+            connector: $this->createMock(ConnectorInterface::class),
+            inboundPipeline: $this->createMock(InboundPipelineInterface::class),
+            sessionContext: new RuntimeSessionContext('runner-session-1'),
+            replayCaptureSinksOverride: [$sink],
+        );
+
+        self::assertTrue($input->replayCaptureEnabled());
+        self::assertSame([$sink], $input->replayCaptureSinks());
+    }
+
+    public function testPreparedBootstrapInputRejectsExplicitReplayEnableWithoutSinks(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('replayCaptureSinks must not be empty when replay capture is enabled');
+
+        new PreparedRuntimeBootstrapInput(
+            endpoint: 'worker://node-a/session-1',
+            runtimeConfig: RuntimeConfig::create(host: '127.0.0.1', port: 9090, password: 'ClueCon'),
+            connector: $this->createMock(ConnectorInterface::class),
+            inboundPipeline: $this->createMock(InboundPipelineInterface::class),
+            sessionContext: new RuntimeSessionContext('runner-session-1'),
+            replayCaptureEnabledOverride: true,
         );
     }
 }

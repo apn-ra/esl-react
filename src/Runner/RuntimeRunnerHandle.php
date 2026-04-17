@@ -3,10 +3,11 @@
 namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
+use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
 use Apntalk\EslReact\Runtime\RuntimeClient;
 use React\Promise\PromiseInterface;
 
-final class RuntimeRunnerHandle
+final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface
 {
     /** @var list<callable(RuntimeLifecycleSnapshot): void> */
     private array $lifecycleListeners = [];
@@ -86,6 +87,78 @@ final class RuntimeRunnerHandle
             health: $this->client->health()->snapshot(),
             startupErrorClass: $this->startupError !== null ? get_class($this->startupError) : null,
             startupErrorMessage: $this->startupError?->getMessage(),
+        );
+    }
+
+    public function feedbackSnapshot(): RuntimeFeedbackSnapshot
+    {
+        $health = $this->client->health()->snapshot();
+        $subscriptionState = new RuntimeSubscriptionStateSnapshot(
+            subscribeAll: false,
+            eventNames: $health->activeSubscriptions,
+            filters: [],
+        );
+        $observedSubscriptionState = new RuntimeObservedSubscriptionStateSnapshot(
+            subscribeAll: false,
+            eventNames: [],
+            filters: [],
+            isCurrentForActiveSession: false,
+        );
+        $reconnectState = new RuntimeReconnectStateSnapshot();
+        $activeApiCommandCount = 0;
+        $queuedApiCommandCount = 0;
+        $isReconnectRetryScheduled = false;
+
+        if ($this->client instanceof RuntimeClient) {
+            $desiredState = $this->client->desiredSubscriptionState();
+            $subscriptionState = new RuntimeSubscriptionStateSnapshot(
+                subscribeAll: $desiredState['subscribe_all'],
+                eventNames: $desiredState['event_names'],
+                filters: $desiredState['filters'],
+            );
+            $observedState = $this->client->observedSubscriptionState();
+            $observedSubscriptionState = new RuntimeObservedSubscriptionStateSnapshot(
+                subscribeAll: $observedState['subscribe_all'],
+                eventNames: $observedState['event_names'],
+                filters: $observedState['filters'],
+                isCurrentForActiveSession: $observedState['is_current_for_active_session'],
+            );
+            $reconnectStateData = $this->client->reconnectState();
+            $reconnectState = new RuntimeReconnectStateSnapshot(
+                phase: RuntimeReconnectPhase::from($reconnectStateData['phase']),
+                attemptNumber: $reconnectStateData['attempt_number'],
+                isRetryScheduled: $reconnectStateData['is_retry_scheduled'],
+                backoffDelaySeconds: $reconnectStateData['backoff_delay_seconds'],
+                nextRetryDueAtMicros: $reconnectStateData['next_retry_due_at_micros'],
+                remainingDelaySeconds: $reconnectStateData['remaining_delay_seconds'],
+                isTerminallyStopped: $reconnectStateData['is_terminally_stopped'],
+                isRetryExhausted: $reconnectStateData['is_retry_exhausted'],
+                requiresExternalIntervention: $reconnectStateData['requires_external_intervention'],
+                isFailClosedTerminalState: $reconnectStateData['is_fail_closed_terminal_state'],
+                terminalStopReason: $reconnectStateData['terminal_stop_reason'] !== null
+                    ? RuntimeReconnectStopReason::from($reconnectStateData['terminal_stop_reason'])
+                    : null,
+                terminalStoppedAtMicros: $reconnectStateData['terminal_stopped_at_micros'],
+                lastRetryAttemptStartedAtMicros: $reconnectStateData['last_retry_attempt_started_at_micros'],
+                lastScheduledRetryDueAtMicros: $reconnectStateData['last_scheduled_retry_due_at_micros'],
+                lastScheduledBackoffDelaySeconds: $reconnectStateData['last_scheduled_backoff_delay_seconds'],
+                terminalStoppedDurationSeconds: $reconnectStateData['terminal_stopped_duration_seconds'],
+            );
+            $activeApiCommandCount = $this->client->activeApiCommandCount();
+            $queuedApiCommandCount = $this->client->queuedApiCommandCount();
+            $isReconnectRetryScheduled = $this->client->isReconnectRetryScheduled();
+        }
+
+        return new RuntimeFeedbackSnapshot(
+            endpoint: $this->endpoint,
+            sessionContext: $this->sessionContext,
+            health: $health,
+            subscriptionState: $subscriptionState,
+            observedSubscriptionState: $observedSubscriptionState,
+            reconnectState: $reconnectState,
+            activeApiCommandCount: $activeApiCommandCount,
+            queuedApiCommandCount: $queuedApiCommandCount,
+            isReconnectRetryScheduled: $isReconnectRetryScheduled,
         );
     }
 

@@ -32,6 +32,8 @@ use Apntalk\EslReact\Protocol\EnvelopePump;
 use Apntalk\EslReact\Protocol\InboundMessageRouter;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
+use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
+use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
 use Apntalk\EslReact\Supervisor\ReconnectScheduler;
@@ -64,6 +66,9 @@ final class RuntimeClient implements AsyncEslClientInterface
     private bool $supervisionEnabled = false;
     private bool $suppressReconnectOnNextClose = false;
     private bool $reconnectScheduled = false;
+    private RuntimeReconnectPhase $reconnectPhase = RuntimeReconnectPhase::Idle;
+    private ?RuntimeReconnectStopReason $reconnectStopReason = null;
+    private ?float $reconnectTerminalStoppedAtMicros = null;
     private ?\Throwable $pendingCloseReason = null;
     private int $connectionGeneration = 0;
 
@@ -126,6 +131,9 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->commands->exitDrainMode();
         $this->connectDeferred = new Deferred();
         $this->reconnects->reset();
+        $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+        $this->reconnectStopReason = null;
+        $this->reconnectTerminalStoppedAtMicros = null;
         $this->startConnectionAttempt();
 
         $connect = $this->connectDeferred;
@@ -207,6 +215,9 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->supervisionEnabled = false;
             $this->reconnects->cancel();
             $this->reconnectScheduled = false;
+            $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+            $this->reconnectStopReason = RuntimeReconnectStopReason::ExplicitShutdown;
+            $this->markReconnectTerminallyStopped();
             $this->heartbeat->stop();
             $this->commands->enterDrainMode();
             $this->cancelConnectTimeout();
@@ -224,6 +235,9 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->supervisionEnabled = false;
             $this->reconnects->cancel();
             $this->reconnectScheduled = false;
+            $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+            $this->reconnectStopReason = RuntimeReconnectStopReason::ExplicitShutdown;
+            $this->markReconnectTerminallyStopped();
             $this->heartbeat->stop();
             $this->cancelDrainTimers();
             $this->connectionState = ConnectionState::Closed;
@@ -237,6 +251,9 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->supervisionEnabled = false;
         $this->reconnects->cancel();
         $this->reconnectScheduled = false;
+        $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+        $this->reconnectStopReason = RuntimeReconnectStopReason::ExplicitShutdown;
+        $this->markReconnectTerminallyStopped();
         $this->heartbeat->stop();
         $this->commands->enterDrainMode();
         $this->connectionState = ConnectionState::Draining;
@@ -271,6 +288,16 @@ final class RuntimeClient implements AsyncEslClientInterface
         return $this->commands->totalPendingCount();
     }
 
+    public function activeApiCommandCount(): int
+    {
+        return $this->commands->inflightCount();
+    }
+
+    public function queuedApiCommandCount(): int
+    {
+        return $this->commands->queuedCount();
+    }
+
     public function pendingBgapiCount(): int
     {
         return $this->bgapi->pendingCount();
@@ -295,6 +322,106 @@ final class RuntimeClient implements AsyncEslClientInterface
     public function reconnectAttempts(): int
     {
         return $this->reconnects->attempts();
+    }
+
+    public function isReconnectRetryScheduled(): bool
+    {
+        return $this->reconnectScheduled;
+    }
+
+    /**
+     * @return array{
+     *   phase: string,
+     *   attempt_number: ?int,
+     *   is_retry_scheduled: bool,
+     *   backoff_delay_seconds: ?float,
+     *   next_retry_due_at_micros: ?float,
+     *   remaining_delay_seconds: ?float,
+     *   is_terminally_stopped: bool,
+     *   is_retry_exhausted: bool,
+     *   requires_external_intervention: bool,
+     *   is_fail_closed_terminal_state: bool,
+     *   terminal_stop_reason: ?string,
+     *   terminal_stopped_at_micros: ?float,
+     *   last_retry_attempt_started_at_micros: ?float,
+     *   last_scheduled_retry_due_at_micros: ?float,
+     *   last_scheduled_backoff_delay_seconds: ?float,
+     *   terminal_stopped_duration_seconds: ?float
+     * }
+     */
+    public function reconnectState(): array
+    {
+        $attemptNumber = null;
+        $backoffDelaySeconds = null;
+        $nextRetryDueAtMicros = null;
+        $remainingDelaySeconds = null;
+
+        if ($this->reconnectPhase === RuntimeReconnectPhase::WaitingToRetry) {
+            $attemptNumber = $this->reconnects->scheduledAttemptNumber();
+            $backoffDelaySeconds = $this->reconnects->scheduledDelaySeconds();
+            $nextRetryDueAtMicros = $this->reconnects->nextRetryDueAtMicros();
+            $remainingDelaySeconds = $this->reconnects->remainingDelaySeconds();
+        } elseif (
+            $this->reconnectPhase === RuntimeReconnectPhase::AttemptingReconnect
+            || $this->reconnectPhase === RuntimeReconnectPhase::RestoringSession
+        ) {
+            $attemptNumber = $this->reconnects->attempts() > 0 ? $this->reconnects->attempts() : null;
+            $backoffDelaySeconds = $attemptNumber !== null
+                ? $this->config->retryPolicy->delayForAttempt($attemptNumber)
+                : null;
+        }
+
+        $terminalStoppedDurationSeconds = null;
+        if ($this->reconnectTerminalStoppedAtMicros !== null) {
+            $terminalStoppedDurationSeconds = max(
+                0.0,
+                ((microtime(true) * 1_000_000.0) - $this->reconnectTerminalStoppedAtMicros) / 1_000_000.0,
+            );
+        }
+
+        return [
+            'phase' => $this->reconnectPhase->value,
+            'attempt_number' => $attemptNumber,
+            'is_retry_scheduled' => $this->reconnectScheduled,
+            'backoff_delay_seconds' => $backoffDelaySeconds,
+            'next_retry_due_at_micros' => $nextRetryDueAtMicros,
+            'remaining_delay_seconds' => $remainingDelaySeconds,
+            'is_terminally_stopped' => $this->reconnectStopReason !== null,
+            'is_retry_exhausted' => $this->reconnectStopReason === RuntimeReconnectStopReason::RetryExhausted,
+            'requires_external_intervention' => $this->reconnectStopReason !== null,
+            'is_fail_closed_terminal_state' => $this->reconnectStopReason?->isFailClosed() ?? false,
+            'terminal_stop_reason' => $this->reconnectStopReason?->value,
+            'terminal_stopped_at_micros' => $this->reconnectTerminalStoppedAtMicros,
+            'last_retry_attempt_started_at_micros' => $this->reconnects->lastRetryAttemptStartedAtMicros(),
+            'last_scheduled_retry_due_at_micros' => $this->reconnects->lastScheduledDueAtMicros(),
+            'last_scheduled_backoff_delay_seconds' => $this->reconnects->lastScheduledDelaySeconds(),
+            'terminal_stopped_duration_seconds' => $terminalStoppedDurationSeconds,
+        ];
+    }
+
+    /**
+     * @return array{
+     *   subscribe_all: bool,
+     *   event_names: list<string>,
+     *   filters: list<array{headerName: string, headerValue: string}>
+     * }
+     */
+    public function desiredSubscriptionState(): array
+    {
+        return $this->subscriptions->desiredState();
+    }
+
+    /**
+     * @return array{
+     *   subscribe_all: bool,
+     *   event_names: list<string>,
+     *   filters: list<array{headerName: string, headerValue: string}>,
+     *   is_current_for_active_session: bool
+     * }
+     */
+    public function observedSubscriptionState(): array
+    {
+        return $this->subscriptions->observedState();
     }
 
     public function connectionGeneration(): int
@@ -348,6 +475,9 @@ final class RuntimeClient implements AsyncEslClientInterface
 
                 if ($reply instanceof ErrorReply) {
                     $this->cancelConnectTimeout();
+                    $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+                    $this->reconnectStopReason = RuntimeReconnectStopReason::AuthenticationRejected;
+                    $this->markReconnectTerminallyStopped();
                     $this->connectionState = ConnectionState::Disconnected;
                     $this->sessionState = SessionState::Failed;
                     $this->livenessState = LivenessState::Dead;
@@ -390,6 +520,8 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
                 $this->livenessState = LivenessState::Dead;
+                $this->reconnectStopReason = RuntimeReconnectStopReason::HandshakeProtocolFailure;
+                $this->markReconnectTerminallyStopped();
                 $this->notifyLifecycleChange();
                 $this->recordError($error);
                 $this->cancelConnectTimeout();
@@ -416,6 +548,8 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
                 $this->livenessState = LivenessState::Dead;
+                $this->reconnectStopReason = RuntimeReconnectStopReason::HandshakeProtocolFailure;
+                $this->markReconnectTerminallyStopped();
                 $this->notifyLifecycleChange();
                 $this->recordError($error);
                 $this->cancelConnectTimeout();
@@ -500,7 +634,11 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->envelopePump->detach();
         $this->outbound->detach();
         $this->connection = null;
+        $this->subscriptions->invalidateObservedState();
         $this->connectionState = $this->draining ? ConnectionState::Closed : ConnectionState::Disconnected;
+        if (!$this->draining) {
+            $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+        }
         if ($this->sessionState !== SessionState::Failed) {
             $this->sessionState = SessionState::Disconnected;
         }
@@ -519,10 +657,13 @@ final class RuntimeClient implements AsyncEslClientInterface
             if ($this->shouldScheduleReconnect($disconnectReason)) {
                 $this->scheduleReconnect($disconnectReason);
             } else {
+                $this->reconnectPhase = RuntimeReconnectPhase::Idle;
                 $this->settleConnectFailure($disconnectReason);
             }
         } elseif ($this->shouldScheduleReconnect($disconnectReason)) {
             $this->scheduleReconnect($disconnectReason);
+        } else {
+            $this->reconnectPhase = RuntimeReconnectPhase::Idle;
         }
 
         if ($this->disconnectDeferred !== null) {
@@ -615,9 +756,15 @@ final class RuntimeClient implements AsyncEslClientInterface
     {
         $this->draining = false;
         $this->commands->exitDrainMode();
+        $this->subscriptions->invalidateObservedState();
+        $this->reconnectPhase = $this->reconnects->attempts() > 0
+            ? RuntimeReconnectPhase::AttemptingReconnect
+            : RuntimeReconnectPhase::Idle;
         $this->connectionState = ConnectionState::Connecting;
         $this->sessionState = SessionState::NotStarted;
         $this->livenessState = LivenessState::Dead;
+        $this->reconnectStopReason = null;
+        $this->reconnectTerminalStoppedAtMicros = null;
         $this->notifyLifecycleChange();
         $this->cancelConnectTimeout();
         $this->startConnectTimeout();
@@ -639,6 +786,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 );
                 $this->recordError($error);
                 $this->livenessState = LivenessState::Dead;
+                $this->reconnectStopReason = null;
                 $this->notifyLifecycleChange();
 
                 if ($this->shouldScheduleReconnect($error)) {
@@ -646,6 +794,9 @@ final class RuntimeClient implements AsyncEslClientInterface
                     return;
                 }
 
+                $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+                $this->reconnectStopReason = $this->classifyTerminalStopReasonAfterConnectFailure();
+                $this->markReconnectTerminallyStopped();
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
                 $this->notifyLifecycleChange();
@@ -670,6 +821,11 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         if ($this->config->retryPolicy->hasExhausted($this->reconnects->attempts())) {
+            $this->reconnectPhase = RuntimeReconnectPhase::Exhausted;
+            $this->reconnectStopReason = $this->config->retryPolicy->enabled
+                ? RuntimeReconnectStopReason::RetryExhausted
+                : RuntimeReconnectStopReason::RetryDisabled;
+            $this->markReconnectTerminallyStopped();
             $this->connectionState = ConnectionState::Disconnected;
             if ($this->sessionState !== SessionState::Failed) {
                 $this->sessionState = SessionState::Disconnected;
@@ -681,6 +837,9 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         $this->connectionState = ConnectionState::Reconnecting;
+        $this->reconnectPhase = RuntimeReconnectPhase::WaitingToRetry;
+        $this->reconnectStopReason = null;
+        $this->reconnectTerminalStoppedAtMicros = null;
         if ($this->sessionState !== SessionState::Failed) {
             $this->sessionState = SessionState::Disconnected;
         }
@@ -691,6 +850,7 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->reconnectScheduled = false;
 
             if (!$this->supervisionEnabled || $this->draining || $this->connectionState === ConnectionState::Closed) {
+                $this->reconnectPhase = RuntimeReconnectPhase::Idle;
                 return;
             }
 
@@ -698,6 +858,11 @@ final class RuntimeClient implements AsyncEslClientInterface
         });
 
         if (!$this->reconnectScheduled && $this->config->retryPolicy->hasExhausted($this->reconnects->attempts())) {
+            $this->reconnectPhase = RuntimeReconnectPhase::Exhausted;
+            $this->reconnectStopReason = $this->config->retryPolicy->enabled
+                ? RuntimeReconnectStopReason::RetryExhausted
+                : RuntimeReconnectStopReason::RetryDisabled;
+            $this->markReconnectTerminallyStopped();
             $this->connectionState = ConnectionState::Disconnected;
             $this->notifyLifecycleChange();
             $this->settleConnectFailure($reason);
@@ -709,6 +874,13 @@ final class RuntimeClient implements AsyncEslClientInterface
      */
     private function restoreDesiredStateAfterAuthentication(): PromiseInterface
     {
+        if ($this->reconnects->attempts() > 0) {
+            $this->reconnectPhase = RuntimeReconnectPhase::RestoringSession;
+            $this->reconnectStopReason = null;
+            $this->reconnectTerminalStoppedAtMicros = null;
+            $this->notifyLifecycleChange();
+        }
+
         return $this->subscriptions->restoreDesiredState();
     }
 
@@ -725,6 +897,9 @@ final class RuntimeClient implements AsyncEslClientInterface
     {
         $this->reconnects->recordSuccess();
         $this->reconnectScheduled = false;
+        $this->reconnectPhase = RuntimeReconnectPhase::Idle;
+        $this->reconnectStopReason = null;
+        $this->reconnectTerminalStoppedAtMicros = null;
         $this->connectionState = ConnectionState::Authenticated;
         $this->sessionState = SessionState::Active;
         $this->heartbeat->reset();
@@ -750,6 +925,20 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->totalInflightWorkCount(),
                 $this->config->backpressure->maxInflightCommands,
             ));
+        }
+    }
+
+    private function classifyTerminalStopReasonAfterConnectFailure(): RuntimeReconnectStopReason
+    {
+        return $this->config->retryPolicy->enabled
+            ? RuntimeReconnectStopReason::RetryExhausted
+            : RuntimeReconnectStopReason::RetryDisabled;
+    }
+
+    private function markReconnectTerminallyStopped(): void
+    {
+        if ($this->reconnectTerminalStoppedAtMicros === null) {
+            $this->reconnectTerminalStoppedAtMicros = microtime(true) * 1_000_000.0;
         }
     }
 

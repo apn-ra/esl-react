@@ -5,7 +5,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
 Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, runner lifecycle snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
-It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals.
+It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals, including explicit prepared-bootstrap replay injection and a stable runner feedback snapshot for downstream health/reporting adapters.
 
 ---
 
@@ -150,6 +150,7 @@ Current runner notes:
 - `run()` starts the live runtime immediately by delegating to the existing `connect()` path.
 - The returned handle exposes `startupPromise()` plus a coarse startup state model.
 - The returned handle exposes `lifecycleSnapshot()` for higher layers that need read-only startup + live runtime observation without taking runtime ownership.
+- The returned handle exposes `feedbackSnapshot()` for higher layers that need one stable read model for prepared runtime identity plus drain/inflight/subscription/retry health feedback.
 - The returned handle exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Package-owned live harnesses cover the runner handle startup and explicit drain-to-stop observation path on a real FreeSWITCH target.
 - Package-owned live harnesses now cover unexpected transport-loss reconnect and recovery on the runner seam in opt-in lab environments that provide safe disruption and restore commands.
@@ -164,6 +165,7 @@ Current runner notes:
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
 - Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
 - `PreparedRuntimeDialTargetInputInterface` additively allows richer prepared-bootstrap inputs to override the dial target URI used by the prepared connector for startup and reconnect attempts.
+- `PreparedRuntimeReplayCaptureInputInterface` additively allows richer prepared-bootstrap inputs to inject replay capture sinks explicitly on the runner seam while reusing the stable `ReplayCaptureSinkInterface` contract from `apntalk/esl-core`.
 - Ongoing runtime lifecycle after startup remains on the stable client/health surface rather than a second parallel runner control plane.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and decoded `InboundPipelineInterface` routing are not part of this runner-input expansion.
 
@@ -206,6 +208,71 @@ This is an observation surface only. It does not start, stop, reconnect, or supe
 push-based lifecycle observation. It does not introduce a second public state
 machine or a separate lifecycle event taxonomy.
 
+### RuntimeFeedbackSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot
+```
+
+Read-only integration snapshot returned by
+`RuntimeRunnerHandle::feedbackSnapshot()`.
+
+It packages:
+
+- endpoint identity
+- optional `RuntimeSessionContext`
+- the current `HealthSnapshot`
+
+Helper methods expose the most common downstream reporting fields directly:
+
+- drain truth
+- inflight counts
+- subscription desired state
+- subscription observed-applied state
+- reconnect attempt count
+- connection/session/liveness state
+
+This is a convenience surface over existing health truth. It does not promise
+transport-level subscription receipts or introduce a second control plane.
+
+Current feedback semantics:
+
+- `isDraining()` is exact for the current runtime instance. It reflects the explicit bounded-drain shutdown path only and stays distinct from unexpected reconnect.
+- `inflightCommandCount()` is the exact accepted API command count in the serial command bus (`active + queued`), not a transport-level completion estimate.
+- `activeApiCommandCount()` and `queuedApiCommandCount()` are exact command-bus counts for the current runtime instance.
+- `pendingBgapiJobCount()` is the exact tracked count of accepted bgapi jobs that have not yet reached a terminal outcome.
+- `subscriptionState()` is exact desired state from the runtime's in-memory subscription/filter tracking. It is not a transport receipt ledger.
+- `observedSubscriptionState()` is conservative locally observed-applied state for the current authenticated session. It reflects subscription/filter commands that the runtime believes completed successfully on the current live session.
+- `activeSubscriptions()` remains the underlying `HealthSnapshot` view of desired event names only. When `subscribeAll` is active, that event-name list is intentionally empty and `subscriptionState()->subscribeAll` is the stronger truth.
+- `observedSubscriptionState()->isCurrentForActiveSession` is `true` only when the runtime believes the observed state is current for the active authenticated session. It resets to `false` on session loss/reconnect and becomes `true` again only after restore for the new session completes.
+- `observedSubscriptionState()` is not a deeper remote receipt ledger than successful local command/reply completion. It does not claim independent server-side receipt beyond that.
+- `reconnectAttempts()` is the exact retry-attempt counter since the last successful authenticated connection.
+- `isReconnectRetryScheduled()` is exact supervisor truth for whether a retry timer is currently pending after an unexpected disconnect.
+- `reconnectState()` packages additive reconnect/backoff detail for downstream reporting:
+  - `phase` is exact runtime-owned reconnect phase truth
+  - `attemptNumber` is exact for the scheduled or active reconnect attempt when recovery is underway
+  - `isRetryScheduled` is exact local scheduler truth
+  - `backoffDelaySeconds` is exact for the currently scheduled or active reconnect attempt
+  - `nextRetryDueAtMicros` and `remainingDelaySeconds` are local scheduler estimates and may drift slightly with event-loop execution latency
+- `reconnectState()` also packages additive terminal reconnect-stop truth:
+  - `isTerminallyStopped` is exact runtime-owned truth for whether autonomous reconnect has stopped permanently
+  - `isRetryExhausted` is exact when terminal stop was caused by bounded retry exhaustion
+  - `requiresExternalIntervention` is exact for whether recovery now needs a new explicit caller action or runtime restart
+  - `isFailClosedTerminalState` is exact for runtime-owned terminal fail-closed policy/failure states and remains `false` for explicit shutdown
+  - `terminalStopReason` is a conservative runtime-known stop category, not a deeper transport diagnosis system
+  - `terminalStoppedAtMicros` is the exact recorded runtime transition time when reconnect became terminally stopped
+  - `lastRetryAttemptStartedAtMicros` is the exact recorded local timestamp for the most recent reconnect attempt start, when one occurred
+  - `lastScheduledRetryDueAtMicros` is the exact last locally scheduled retry due timestamp retained by the scheduler
+  - `lastScheduledBackoffDelaySeconds` is the exact last retained scheduler backoff delay
+  - `terminalStoppedDurationSeconds` is a derived local wall-clock elapsed duration since terminal stop and may drift slightly with event-loop timing
+- `terminalStopReason` currently distinguishes:
+  - `explicit_shutdown`
+  - `retry_exhausted`
+  - `retry_disabled`
+  - `authentication_rejected`
+  - `handshake_timeout`
+  - `handshake_protocol_failure`
+
 ### RuntimeRunnerInputInterface
 
 ```
@@ -242,6 +309,26 @@ Current bootstrap-input notes:
 - Without an additive dial-target override, the prepared connector dials `RuntimeConfig::connectionUri()`.
 
 `PreparedRuntimeBootstrapInput` is the provided immutable implementation for this richer path.
+
+### PreparedRuntimeReplayCaptureInputInterface
+
+```
+Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface
+```
+
+Additive prepared-bootstrap contract for explicit replay-capture injection on
+the runner seam.
+
+| Method | Return type | Description |
+|---|---|---|
+| `replayCaptureEnabled()` | `bool` | Whether replay capture is enabled for this prepared runtime handoff |
+| `replayCaptureSinks()` | `list<ReplayCaptureSinkInterface>` | Replay sinks used for this prepared runtime handoff |
+
+Current replay-bootstrap notes:
+
+- This seam reuses the stable `ReplayCaptureSinkInterface` from `apntalk/esl-core`; it does not introduce a Laravel-specific replay abstraction.
+- If this additive contract is not used, existing `RuntimeConfig` replay settings remain in effect.
+- The seam is for runtime-owned hook emission only. It does not imply persistence, buffering, or replay execution ownership in `esl-react`.
 
 ### PreparedRuntimeDialTargetInputInterface
 
@@ -412,6 +499,7 @@ Apntalk\EslReact\Runner\RuntimeRunnerHandle
 | `startupError()` | `?\Throwable` | Startup failure if the initial connect/auth path failed |
 | `sessionContext()` | `?RuntimeSessionContext` | Runtime-local session context when startup used a prepared-bootstrap input |
 | `lifecycleSnapshot()` | `RuntimeLifecycleSnapshot` | Read-only packaged runner + health lifecycle snapshot |
+| `feedbackSnapshot()` | `RuntimeFeedbackSnapshot` | Read-only packaged runtime feedback snapshot for downstream health/reporting |
 | `onLifecycleChange(callable $listener)` | `void` | Register a synchronous lifecycle listener receiving `RuntimeLifecycleSnapshot` values |
 
 `onLifecycleChange()` notes:
@@ -429,6 +517,23 @@ Apntalk\EslReact\Runner\RuntimeRunnerState
 
 Backed enum. Values: `Starting`, `Running`, `Failed`.
 
+### RuntimeSubscriptionStateSnapshot
+
+```
+Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot
+```
+
+Exact desired-state subscription/filter feedback packaged inside
+`RuntimeFeedbackSnapshot`.
+
+| Field / helper | Meaning |
+|---|---|
+| `subscribeAll` | Whether the runtime currently intends to keep the live session subscribed to all events |
+| `eventNames` | Exact desired event-name baseline when `subscribeAll` is false |
+| `filters` | Exact desired filter set tracked for restore after reconnect |
+| `isEmpty()` | Whether no desired subscriptions or filters are currently tracked |
+| `hasFilters()` | Whether any desired filters are currently tracked |
+
 ### PreparedRuntimeBootstrapInput
 
 ```
@@ -438,7 +543,8 @@ Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput
 Immutable implementation of `PreparedRuntimeBootstrapInputInterface`.
 It also implements `PreparedRuntimeDialTargetInputInterface`; `dialUri()`
 defaults to `RuntimeConfig::connectionUri()` when no explicit override is
-provided.
+provided. It also implements `PreparedRuntimeReplayCaptureInputInterface`;
+prepared-bootstrap replay overrides remain additive and optional.
 
 ### RuntimeSessionContext
 
@@ -447,10 +553,18 @@ Apntalk\EslReact\Runner\RuntimeSessionContext
 ```
 
 Small runtime-local identity DTO for runner handoff correlation. It carries a
-non-empty `sessionId` plus scalar-or-null metadata. It is not a control-plane,
-assignment, or operator-surface model.
-| `dispatchedAtMicros()` | `float` | Local dispatch timestamp |
-| `promise()` | `PromiseInterface<BackgroundJobEvent>` | Resolves on matching completion; rejects on ack timeout, orphan timeout, or terminal shutdown |
+non-empty `sessionId`, optional generic identity labels, and scalar-or-null
+metadata. It is not a control-plane, assignment, or operator-surface model.
+
+Current shape:
+
+- required `sessionId`
+- optional `workerSessionId`
+- optional `connectionProfile`
+- optional `providerIdentity`
+- optional `connectorIdentity`
+- scalar metadata map for downstream-owned labels such as worker correlation,
+  pbx node identity, or transport profile tags
 
 ---
 

@@ -6,12 +6,19 @@ use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
+use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
+use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
+use Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot;
+use Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot;
+use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
 use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
+use Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot;
 use PHPUnit\Framework\TestCase;
 
 final class PublicApiContractTest extends TestCase
@@ -51,6 +58,56 @@ final class PublicApiContractTest extends TestCase
         self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'onLifecycleChange'));
     }
 
+    public function testRuntimeRunnerHandleExposesFeedbackSnapshotMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'feedbackSnapshot'));
+        self::assertTrue(is_a(RuntimeRunnerHandle::class, RuntimeFeedbackProviderInterface::class, true));
+
+        $method = new \ReflectionMethod(RuntimeRunnerHandle::class, 'feedbackSnapshot');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeFeedbackSnapshot::class, $returnType->getName());
+    }
+
+    public function testRuntimeFeedbackSnapshotExposesDesiredSubscriptionStateMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeFeedbackSnapshot::class, 'subscriptionState'));
+
+        $method = new \ReflectionMethod(RuntimeFeedbackSnapshot::class, 'subscriptionState');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeSubscriptionStateSnapshot::class, $returnType->getName());
+    }
+
+    public function testRuntimeFeedbackSnapshotExposesObservedSubscriptionStateMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeFeedbackSnapshot::class, 'observedSubscriptionState'));
+
+        $method = new \ReflectionMethod(RuntimeFeedbackSnapshot::class, 'observedSubscriptionState');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeObservedSubscriptionStateSnapshot::class, $returnType->getName());
+    }
+
+    public function testRuntimeFeedbackSnapshotExposesReconnectStateMethod(): void
+    {
+        self::assertTrue(method_exists(RuntimeFeedbackSnapshot::class, 'reconnectState'));
+
+        $method = new \ReflectionMethod(RuntimeFeedbackSnapshot::class, 'reconnectState');
+        $returnType = $method->getReturnType();
+
+        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertSame(RuntimeReconnectStateSnapshot::class, $returnType->getName());
+    }
+
+    public function testRuntimeReconnectStopReasonIsStableEnumSurface(): void
+    {
+        self::assertTrue(enum_exists(RuntimeReconnectStopReason::class));
+    }
+
     public function testAsyncEslRuntimeRunnerHasStableReturnType(): void
     {
         $method = new \ReflectionMethod(AsyncEslRuntime::class, 'runner');
@@ -75,5 +132,11 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(is_a(PreparedRuntimeDialTargetInputInterface::class, PreparedRuntimeBootstrapInputInterface::class, true));
         self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeDialTargetInputInterface::class, true));
+    }
+
+    public function testPreparedRuntimeReplayCaptureInputIsAdditiveBootstrapContract(): void
+    {
+        self::assertTrue(is_a(PreparedRuntimeReplayCaptureInputInterface::class, PreparedRuntimeBootstrapInputInterface::class, true));
+        self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeReplayCaptureInputInterface::class, true));
     }
 }

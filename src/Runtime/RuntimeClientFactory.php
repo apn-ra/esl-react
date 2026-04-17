@@ -5,6 +5,7 @@ namespace Apntalk\EslReact\Runtime;
 use Apntalk\EslCore\Correlation\ConnectionSessionId;
 use Apntalk\EslCore\Correlation\CorrelationContext;
 use Apntalk\EslCore\Contracts\CommandInterface;
+use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslCore\Events\EventFactory;
 use Apntalk\EslCore\Internal\Classification\InboundMessageClassifier;
 use Apntalk\EslCore\Parsing\FrameParser;
@@ -24,6 +25,7 @@ use Apntalk\EslReact\Protocol\FrameWriter;
 use Apntalk\EslReact\Protocol\InboundMessageRouter;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
+use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use Apntalk\EslReact\Subscription\ActiveSubscriptionSet;
 use Apntalk\EslReact\Subscription\FilterManager;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
@@ -42,22 +44,28 @@ final class RuntimeClientFactory
         LoopInterface $loop,
         ?ConnectorInterface $connector = null,
         ?string $connectionUri = null,
+        ?RuntimeSessionContext $sessionContext = null,
+        ?bool $replayCaptureEnabled = null,
+        ?array $replayCaptureSinks = null,
     ): AsyncEslClientInterface {
         /** @var RuntimeClient|null $client */
         $client = null;
 
         $correlation = new CorrelationContext(ConnectionSessionId::generate());
         $eventStream = new EventStream(new EventFactory(), $correlation);
+        /** @var list<ReplayCaptureSinkInterface> $resolvedReplayCaptureSinks */
+        $resolvedReplayCaptureSinks = $replayCaptureSinks ?? $config->replayCaptureSinks;
         $replay = new RuntimeReplayCapture(
             correlation: $correlation,
-            sinks: $config->replayCaptureSinks,
-            enabled: $config->replayCaptureEnabled,
-            runtimeMetadataProvider: static function () use (&$client): array {
+            sinks: $resolvedReplayCaptureSinks,
+            enabled: $replayCaptureEnabled ?? $config->replayCaptureEnabled,
+            runtimeMetadataProvider: static function () use (&$client, $sessionContext): array {
                 if (!$client instanceof RuntimeClient) {
-                    return [];
+                    return $sessionContext?->replayMetadata() ?? [];
                 }
 
                 return [
+                    ...($sessionContext?->replayMetadata() ?? []),
                     'runtime-connection-state' => $client->connectionState()->value,
                     'runtime-session-state' => $client->sessionState()->value,
                     'runtime-liveness-state' => $client->livenessState()->name,

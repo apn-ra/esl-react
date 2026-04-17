@@ -49,6 +49,7 @@ Current configuration rules:
 - `replayCaptureEnabled: false` means no hooks fire, even if sinks are configured.
 - `replayCaptureEnabled: true` requires at least one sink.
 - Enabling capture does not imply persistence, buffering, or deferred replay behavior.
+- Prepared-bootstrap runner inputs may also inject replay capture explicitly through `PreparedRuntimeReplayCaptureInputInterface`, reusing the same sink contract without forcing downstreams to mutate `RuntimeConfig` ad hoc.
 
 ## Artifact shape
 
@@ -142,6 +143,7 @@ The exact metadata set depends on the capture point. For example:
 - inbound event capture has event name and protocol sequence
 - bgapi completion includes both event facts and the matched job UUID
 - subscription/filter mutation artifacts include a JSON payload describing the accepted intent and desired-state transition
+- when a prepared-bootstrap handoff provides `RuntimeSessionContext`, replay metadata also includes the bounded runtime identity labels from that context (for example `runtime_session_id`, `worker_session_id`, or provider/profile labels)
 
 ## Failure containment
 

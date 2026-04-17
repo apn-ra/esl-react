@@ -14,6 +14,12 @@ use function React\Promise\resolve;
 
 final class SubscriptionManager implements SubscriptionManagerInterface
 {
+    private ActiveSubscriptionSet $observedSubscriptions;
+
+    private FilterManager $observedFilters;
+
+    private bool $observedCurrentForActiveSession = false;
+
     /**
      * @param \Closure(CommandInterface, string, float): PromiseInterface<\Apntalk\EslCore\Contracts\ReplyInterface> $dispatchCommand
      */
@@ -25,7 +31,10 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         /** @var \Closure(): void */
         private readonly \Closure $assertCanMutateLiveSession,
         private readonly ?RuntimeReplayCapture $replayCapture = null,
-    ) {}
+    ) {
+        $this->observedSubscriptions = new ActiveSubscriptionSet();
+        $this->observedFilters = new FilterManager();
+    }
 
     public function subscribe(string ...$eventNames): PromiseInterface
     {
@@ -70,6 +79,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             $this->timeoutSeconds,
         )->then(function () use ($desired): void {
             $this->activeSubscriptions->replace($desired);
+            $this->observedSubscriptions->replace($desired);
+            $this->observedCurrentForActiveSession = true;
         });
     }
 
@@ -100,6 +111,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             $this->timeoutSeconds,
         )->then(function (): void {
             $this->activeSubscriptions->subscribeAll();
+            $this->observedSubscriptions->subscribeAll();
+            $this->observedCurrentForActiveSession = true;
         });
     }
 
@@ -154,10 +167,14 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         )->then(function () use ($desired): void {
             if ($desired === []) {
                 $this->activeSubscriptions->reset();
+                $this->observedSubscriptions->reset();
+                $this->observedCurrentForActiveSession = true;
                 return;
             }
 
             $this->activeSubscriptions->replace($desired);
+            $this->observedSubscriptions->replace($desired);
+            $this->observedCurrentForActiveSession = true;
         });
     }
 
@@ -186,6 +203,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             $this->timeoutSeconds,
         )->then(function () use ($headerName, $headerValue): void {
             $this->filters->addFilter($headerName, $headerValue);
+            $this->observedFilters->addFilter($headerName, $headerValue);
+            $this->observedCurrentForActiveSession = true;
         });
     }
 
@@ -220,12 +239,55 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             $this->timeoutSeconds,
         )->then(function () use ($headerName, $headerValue): void {
             $this->filters->removeFilter($headerName, $headerValue);
+            $this->observedFilters->removeFilter($headerName, $headerValue);
+            $this->observedCurrentForActiveSession = true;
         });
     }
 
     public function activeEventNames(): array
     {
         return $this->activeSubscriptions->eventNames();
+    }
+
+    /**
+     * @return array{
+     *   subscribe_all: bool,
+     *   event_names: list<string>,
+     *   filters: list<array{headerName: string, headerValue: string}>
+     * }
+     */
+    public function desiredState(): array
+    {
+        return [
+            'subscribe_all' => $this->activeSubscriptions->isSubscribedAll(),
+            'event_names' => $this->activeSubscriptions->eventNames(),
+            'filters' => $this->filters->all(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *   subscribe_all: bool,
+     *   event_names: list<string>,
+     *   filters: list<array{headerName: string, headerValue: string}>,
+     *   is_current_for_active_session: bool
+     * }
+     */
+    public function observedState(): array
+    {
+        return [
+            'subscribe_all' => $this->observedSubscriptions->isSubscribedAll(),
+            'event_names' => $this->observedSubscriptions->eventNames(),
+            'filters' => $this->observedFilters->all(),
+            'is_current_for_active_session' => $this->observedCurrentForActiveSession,
+        ];
+    }
+
+    public function invalidateObservedState(): void
+    {
+        $this->observedSubscriptions->reset();
+        $this->observedFilters->reset();
+        $this->observedCurrentForActiveSession = false;
     }
 
     public function hasFilters(): bool
@@ -241,6 +303,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
      */
     public function restoreDesiredState(): PromiseInterface
     {
+        $this->invalidateObservedState();
+
         /** @var PromiseInterface<void> $promise */
         $promise = $this->resolvedVoid();
 
@@ -250,7 +314,10 @@ final class SubscriptionManager implements SubscriptionManagerInterface
                     EventSubscriptionCommand::all(),
                     'event plain all',
                     $this->timeoutSeconds,
-                )->then(static fn (): null => null);
+                )->then(function (): null {
+                    $this->observedSubscriptions->subscribeAll();
+                    return null;
+                });
             });
         } elseif ($this->activeSubscriptions->eventNames() !== []) {
             $desired = $this->activeSubscriptions->eventNames();
@@ -259,7 +326,10 @@ final class SubscriptionManager implements SubscriptionManagerInterface
                     EventSubscriptionCommand::forNames($desired),
                     'event plain ' . implode(' ', $desired),
                     $this->timeoutSeconds,
-                )->then(static fn (): null => null);
+                )->then(function () use ($desired): null {
+                    $this->observedSubscriptions->replace($desired);
+                    return null;
+                });
             });
         }
 
@@ -269,12 +339,18 @@ final class SubscriptionManager implements SubscriptionManagerInterface
                     FilterCommand::add($filter['headerName'], $filter['headerValue']),
                     sprintf('filter %s %s', $filter['headerName'], $filter['headerValue']),
                     $this->timeoutSeconds,
-                )->then(static fn (): null => null);
+                )->then(function () use ($filter): null {
+                    $this->observedFilters->addFilter($filter['headerName'], $filter['headerValue']);
+                    return null;
+                });
             });
         }
 
         /** @var PromiseInterface<void> $restored */
-        $restored = $promise->then(static fn (): null => null);
+        $restored = $promise->then(function (): null {
+            $this->observedCurrentForActiveSession = true;
+            return null;
+        });
 
         return $restored;
     }

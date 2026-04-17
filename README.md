@@ -127,11 +127,13 @@ Current runner truth:
 - The runner consumes `esl-react` owned prepared input and starts the live runtime immediately via `connect()`.
 - The coarse runner startup lifecycle is `starting -> running` or `starting -> failed`.
 - The returned handle exposes `lifecycleSnapshot()` as the preferred read-only higher-layer observation seam for startup state, connection/session health, liveness, reconnecting, drain, and failure truth.
+- The returned handle exposes `feedbackSnapshot()` as the preferred stable reporting seam for prepared runtime identity plus drain, inflight, subscription, and retry feedback.
 - The returned handle also exposes `onLifecycleChange()` for push-based lifecycle observation without polling.
 - Ongoing runtime lifecycle remains visible through the stable client health model (`ConnectionState`, `SessionState`, `HealthSnapshot`).
 - `PreparedRuntimeInput` preserves the config-driven path for simple adapters.
 - `PreparedRuntimeBootstrapInput` supports a richer handoff with a prepared ReactPHP `ConnectorInterface`, prepared `InboundPipelineInterface`, and runtime-local `RuntimeSessionContext`.
 - `PreparedRuntimeBootstrapInput` can also carry an explicit prepared dial target URI, so higher layers may reuse the prepared connector path for non-default schemes such as `tls://...` without moving runtime ownership out of `esl-react`.
+- `PreparedRuntimeBootstrapInput` can also inject replay capture explicitly for the prepared runner handoff, reusing the stable `ReplayCaptureSinkInterface` contract from `apntalk/esl-core`.
 - The prepared connector is used for live startup and reconnect attempts. This lets higher layers prepare transport access without making `esl-react` own their control plane.
 - The prepared pipeline is accepted and reset as part of the runner handoff lifecycle, but decoded-pipeline routing is not active yet. The current live protocol loop still uses the existing frame pump/router path.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and full replacement of the live ingress router with `InboundPipelineInterface` remain deferred.
@@ -147,6 +149,7 @@ Richer prepared-bootstrap example:
 
 ```php
 use Apntalk\EslCore\Inbound\InboundPipeline;
+use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
@@ -158,13 +161,24 @@ $input = new PreparedRuntimeBootstrapInput(
     connector: new Connector([], $loop),
     inboundPipeline: new InboundPipeline(),
     sessionContext: new RuntimeSessionContext(
-        sessionId: 'worker-session-123',
+        sessionId: 'runtime-session-123',
         metadata: ['pbx_node' => 'node-a'],
+        workerSessionId: 'worker-session-123',
+        connectionProfile: 'primary-pbx',
     ),
     dialUri: 'tls://pbx.example.test:7443',
+    replayCaptureSinksOverride: [
+        new class () implements ReplayCaptureSinkInterface {
+            public function capture(\Apntalk\EslCore\Contracts\ReplayEnvelopeInterface $envelope): void
+            {
+                // lightweight runtime-owned capture only
+            }
+        },
+    ],
 );
 
 $handle = AsyncEslRuntime::runner()->run($input, $loop);
+$feedback = $handle->feedbackSnapshot();
 ```
 
 ---

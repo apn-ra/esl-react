@@ -12,6 +12,12 @@ Higher-layer packages that start runtimes through `RuntimeRunnerInterface` may
 prefer `RuntimeRunnerHandle::lifecycleSnapshot()`. That snapshot includes the
 same `HealthSnapshot` truth plus runner startup state and prepared session
 context.
+For downstream health/reporting integration, `RuntimeRunnerHandle::feedbackSnapshot()`
+packages the same health truth with prepared runtime identity in one stable
+read model.
+That feedback surface also adds exact desired subscription/filter state and
+exact retry-scheduling truth that are specific to the package-owned runner
+integration seam.
 
 ---
 
@@ -109,6 +115,22 @@ Type: `array<string>`
 
 The list of event names currently subscribed, as tracked by `SubscriptionManager`. This reflects the in-memory desired state. After a reconnect, this list is the target set the runtime restores onto the new session.
 
+Important nuance:
+
+- this is desired event-name state only
+- when the runtime is in `subscribeAll` mode, this list is intentionally empty
+- for runner-facing integrations that need the stronger desired-state shape,
+  `RuntimeRunnerHandle::feedbackSnapshot()->subscriptionState()` exposes
+  `subscribeAll`, `eventNames`, and desired filters together
+- for runner-facing integrations that also need conservative current-session
+  applied truth, `RuntimeRunnerHandle::feedbackSnapshot()->observedSubscriptionState()`
+  exposes what the runtime believes it has successfully applied on the current
+  authenticated session after command replies complete
+- `observedSubscriptionState()` is invalidated on reconnect/session loss and
+  rebuilt only after the restore path completes on the new session
+- this remains weaker than a deeper transport receipt ledger and should be
+  treated as local runtime-applied truth, not independent server acknowledgement
+
 ---
 
 ### reconnectAttempts
@@ -116,6 +138,43 @@ The list of event names currently subscribed, as tracked by `SubscriptionManager
 Type: `int`
 
 The number of reconnect attempts made since the last successful authenticated connection. Resets to zero when recovery succeeds. Incremented each time the supervisor starts a new retry attempt after an unexpected disconnect or transient connect failure.
+
+For runner-facing integrations that also need to know whether a retry timer is
+currently pending, `RuntimeRunnerHandle::feedbackSnapshot()->isReconnectRetryScheduled()`
+exposes that exact supervisor truth.
+
+For runner-facing integrations that need stronger reconnect/backoff detail,
+`RuntimeRunnerHandle::feedbackSnapshot()->reconnectState()` packages:
+
+- exact reconnect phase truth (`idle`, `waiting_to_retry`, `attempting_reconnect`, `restoring_session`, `exhausted`)
+- exact scheduled or active attempt number while recovery is underway
+- exact local scheduler truth for whether a retry timer is pending
+- exact backoff delay for the scheduled or active reconnect attempt
+- approximate local wall-clock next-due and remaining-delay values when a retry timer is pending
+
+The wall-clock due time and remaining delay are local event-loop scheduler
+packaging, not a hard real-time guarantee. They may drift slightly with loop
+latency.
+
+The same reconnect detail surface now also distinguishes terminal reconnect-stop
+truth:
+
+- `isTerminallyStopped` means the runtime has stopped autonomous reconnect
+- `isRetryExhausted` is exact bounded-retry exhaustion truth
+- `requiresExternalIntervention` means recovery now needs a new explicit caller
+  action or runtime replacement
+- `isFailClosedTerminalState` distinguishes fail-closed terminal outcomes from
+  explicit shutdown
+- `terminalStopReason` is a conservative runtime-known category only; it does
+  not claim deeper transport diagnosis beyond what the runtime itself knows
+- `terminalStoppedAtMicros` is the exact recorded runtime transition timestamp
+  for terminal reconnect stop
+- `lastRetryAttemptStartedAtMicros` is the exact recorded local timestamp for
+  the most recent reconnect attempt start, when one occurred
+- `lastScheduledRetryDueAtMicros` and `lastScheduledBackoffDelaySeconds` are
+  the exact last retained scheduler values for retry timing context
+- `terminalStoppedDurationSeconds` is a derived local elapsed duration since
+  terminal stop and may drift slightly with wall-clock/event-loop timing
 
 ---
 

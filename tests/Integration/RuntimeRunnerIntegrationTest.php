@@ -16,7 +16,10 @@ use Apntalk\EslReact\Exceptions\AuthenticationException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
+use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
+use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
+use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use Apntalk\EslReact\Runner\RuntimeRunnerState;
 use Apntalk\EslReact\Session\SessionState;
@@ -117,6 +120,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame(SessionState::Active, $snapshot->sessionState);
         self::assertTrue($snapshot->isLive);
 
+        $server->closeActiveConnection();
         $server->close();
     }
 
@@ -299,6 +303,420 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->close();
     }
 
+    public function testRunnerFeedbackSnapshotPackagesIdentityAndHealthTruth(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('bgapi status', $command);
+            $server->writeBgapiAcceptedReply($connection, 'job-feedback-1');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: 'worker://node-a/session-identity',
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                ),
+                connector: new Connector([], $this->loop),
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext(
+                    'runtime-session-1',
+                    metadata: ['pbx_node' => 'node-a'],
+                    workerSessionId: 'worker-session-1',
+                    connectionProfile: 'profile-a',
+                    providerIdentity: 'provider-a',
+                    connectorIdentity: 'connector-a',
+                ),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+
+        $feedback = $handle->feedbackSnapshot();
+
+        self::assertInstanceOf(RuntimeFeedbackSnapshot::class, $feedback);
+        self::assertSame('worker://node-a/session-identity', $feedback->endpoint);
+        self::assertSame('runtime-session-1', $feedback->identity()?->sessionId());
+        self::assertSame('worker-session-1', $feedback->identity()?->workerSessionId());
+        self::assertSame('profile-a', $feedback->identity()?->connectionProfile());
+        self::assertSame('provider-a', $feedback->identity()?->providerIdentity());
+        self::assertSame('connector-a', $feedback->identity()?->connectorIdentity());
+        self::assertSame([
+            'runtime_session_id' => 'runtime-session-1',
+            'worker_session_id' => 'worker-session-1',
+            'connection_profile' => 'profile-a',
+            'provider_identity' => 'provider-a',
+            'connector_identity' => 'connector-a',
+            'pbx_node' => 'node-a',
+        ], $feedback->identity()?->identityMetadata());
+        self::assertFalse($feedback->isDraining());
+        self::assertSame([], $feedback->activeSubscriptions());
+        self::assertFalse($feedback->subscriptionState()->subscribeAll);
+        self::assertSame([], $feedback->subscriptionState()->eventNames);
+        self::assertSame([], $feedback->subscriptionState()->filters);
+        self::assertFalse($feedback->observedSubscriptionState()->subscribeAll);
+        self::assertSame([], $feedback->observedSubscriptionState()->eventNames);
+        self::assertSame([], $feedback->observedSubscriptionState()->filters);
+        self::assertTrue($feedback->observedSubscriptionState()->isCurrentForActiveSession);
+        self::assertSame(RuntimeReconnectPhase::Idle, $feedback->reconnectState()->phase);
+        self::assertNull($feedback->reconnectState()->attemptNumber);
+        self::assertFalse($feedback->reconnectState()->isRetryScheduled);
+        self::assertNull($feedback->reconnectState()->backoffDelaySeconds);
+        self::assertNull($feedback->reconnectState()->nextRetryDueAtMicros);
+        self::assertNull($feedback->reconnectState()->remainingDelaySeconds);
+        self::assertFalse($feedback->reconnectState()->isTerminallyStopped);
+        self::assertFalse($feedback->reconnectState()->isRetryExhausted);
+        self::assertFalse($feedback->reconnectState()->requiresExternalIntervention);
+        self::assertFalse($feedback->reconnectState()->isFailClosedTerminalState);
+        self::assertNull($feedback->reconnectState()->terminalStopReason);
+        self::assertNull($feedback->reconnectState()->terminalStoppedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledBackoffDelaySeconds);
+        self::assertNull($feedback->reconnectState()->terminalStoppedDurationSeconds);
+        self::assertSame(0, $feedback->reconnectAttempts());
+        self::assertFalse($feedback->isReconnectRetryScheduled());
+        self::assertSame(0, $feedback->activeApiCommandCount());
+        self::assertSame(0, $feedback->queuedApiCommandCount());
+
+        $bgapiHandle = $handle->client()->bgapi('status');
+        $bgapiHandle->promise()->then(static fn (): null => null, static fn (): null => null);
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->pendingBgapiJobCount() === 1,
+            0.2,
+        );
+
+        $pendingFeedback = $handle->feedbackSnapshot();
+
+        self::assertSame(1, $pendingFeedback->pendingBgapiJobCount());
+        self::assertGreaterThanOrEqual(1, $pendingFeedback->totalInflightCount());
+        self::assertSame(
+            $pendingFeedback->inflightCommandCount() + $pendingFeedback->pendingBgapiJobCount(),
+            $pendingFeedback->totalInflightCount(),
+        );
+        self::assertGreaterThanOrEqual(0, $pendingFeedback->activeApiCommandCount());
+        self::assertGreaterThanOrEqual(0, $pendingFeedback->queuedApiCommandCount());
+        self::assertSame(
+            $pendingFeedback->activeApiCommandCount() + $pendingFeedback->queuedApiCommandCount(),
+            $pendingFeedback->inflightCommandCount(),
+        );
+        self::assertSame(ConnectionState::Authenticated, $pendingFeedback->connectionState());
+        self::assertSame(SessionState::Active, $pendingFeedback->sessionState());
+        self::assertTrue($pendingFeedback->isLive());
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
+    public function testRunnerFeedbackSnapshotExposesDesiredSubscriptionStateAndRetrySchedulingTruth(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('filter Unique-ID uuid-1', $command);
+            $server->writeCommandReply($connection, '+OK filter added');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('filter Unique-ID uuid-1', $command);
+            $server->writeCommandReply($connection, '+OK filter added');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: 'worker://node-a/session-feedback',
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.05),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+                connector: new Connector([], $this->loop),
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext('runtime-session-2'),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+        $this->await($handle->client()->subscriptions()->subscribeAll());
+        $this->await($handle->client()->subscriptions()->addFilter('Unique-ID', 'uuid-1'));
+
+        $desired = $handle->feedbackSnapshot()->subscriptionState();
+
+        self::assertTrue($desired->subscribeAll);
+        self::assertSame([], $desired->eventNames);
+        self::assertSame([
+            ['headerName' => 'Unique-ID', 'headerValue' => 'uuid-1'],
+        ], $desired->filters);
+        self::assertSame([], $handle->feedbackSnapshot()->activeSubscriptions());
+        self::assertTrue($handle->feedbackSnapshot()->observedSubscriptionState()->subscribeAll);
+        self::assertSame([], $handle->feedbackSnapshot()->observedSubscriptionState()->eventNames);
+        self::assertSame([
+            ['headerName' => 'Unique-ID', 'headerValue' => 'uuid-1'],
+        ], $handle->feedbackSnapshot()->observedSubscriptionState()->filters);
+        self::assertTrue($handle->feedbackSnapshot()->observedSubscriptionState()->isCurrentForActiveSession);
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->isReconnectRetryScheduled(),
+            0.3,
+        );
+
+        $reconnecting = $handle->feedbackSnapshot();
+        self::assertSame(ConnectionState::Reconnecting, $reconnecting->connectionState());
+        self::assertFalse($reconnecting->isDraining());
+        self::assertTrue($reconnecting->isReconnectRetryScheduled());
+        self::assertSame(RuntimeReconnectPhase::WaitingToRetry, $reconnecting->reconnectState()->phase);
+        self::assertSame(1, $reconnecting->reconnectState()->attemptNumber);
+        self::assertTrue($reconnecting->reconnectState()->isRetryScheduled);
+        self::assertGreaterThan(0.0, $reconnecting->reconnectState()->backoffDelaySeconds ?? 0.0);
+        self::assertNotNull($reconnecting->reconnectState()->nextRetryDueAtMicros);
+        self::assertNotNull($reconnecting->reconnectState()->remainingDelaySeconds);
+        self::assertFalse($reconnecting->reconnectState()->isTerminallyStopped);
+        self::assertFalse($reconnecting->reconnectState()->isRetryExhausted);
+        self::assertFalse($reconnecting->reconnectState()->requiresExternalIntervention);
+        self::assertFalse($reconnecting->reconnectState()->isFailClosedTerminalState);
+        self::assertNull($reconnecting->reconnectState()->terminalStopReason);
+        self::assertNull($reconnecting->reconnectState()->terminalStoppedAtMicros);
+        self::assertNull($reconnecting->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($reconnecting->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertGreaterThan(0.0, $reconnecting->reconnectState()->lastScheduledBackoffDelaySeconds ?? 0.0);
+        self::assertNull($reconnecting->reconnectState()->terminalStoppedDurationSeconds);
+        self::assertTrue($reconnecting->subscriptionState()->subscribeAll);
+        self::assertSame([
+            ['headerName' => 'Unique-ID', 'headerValue' => 'uuid-1'],
+        ], $reconnecting->subscriptionState()->filters);
+        self::assertFalse($reconnecting->observedSubscriptionState()->subscribeAll);
+        self::assertSame([], $reconnecting->observedSubscriptionState()->eventNames);
+        self::assertSame([], $reconnecting->observedSubscriptionState()->filters);
+        self::assertFalse($reconnecting->observedSubscriptionState()->isCurrentForActiveSession);
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->connectionState() === ConnectionState::Authenticated
+                && $handle->feedbackSnapshot()->isReconnectRetryScheduled() === false,
+            1.0,
+        );
+
+        $recovered = $handle->feedbackSnapshot();
+        self::assertSame(ConnectionState::Authenticated, $recovered->connectionState());
+        self::assertFalse($recovered->isReconnectRetryScheduled());
+        self::assertSame(RuntimeReconnectPhase::Idle, $recovered->reconnectState()->phase);
+        self::assertNull($recovered->reconnectState()->attemptNumber);
+        self::assertFalse($recovered->reconnectState()->isRetryScheduled);
+        self::assertNull($recovered->reconnectState()->backoffDelaySeconds);
+        self::assertNull($recovered->reconnectState()->nextRetryDueAtMicros);
+        self::assertNull($recovered->reconnectState()->remainingDelaySeconds);
+        self::assertFalse($recovered->reconnectState()->isTerminallyStopped);
+        self::assertFalse($recovered->reconnectState()->isRetryExhausted);
+        self::assertFalse($recovered->reconnectState()->requiresExternalIntervention);
+        self::assertFalse($recovered->reconnectState()->isFailClosedTerminalState);
+        self::assertNull($recovered->reconnectState()->terminalStopReason);
+        self::assertNull($recovered->reconnectState()->terminalStoppedAtMicros);
+        self::assertNotNull($recovered->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($recovered->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertGreaterThan(0.0, $recovered->reconnectState()->lastScheduledBackoffDelaySeconds ?? 0.0);
+        self::assertNull($recovered->reconnectState()->terminalStoppedDurationSeconds);
+        self::assertTrue($recovered->subscriptionState()->subscribeAll);
+        self::assertSame([
+            ['headerName' => 'Unique-ID', 'headerValue' => 'uuid-1'],
+        ], $recovered->subscriptionState()->filters);
+        self::assertTrue($recovered->observedSubscriptionState()->subscribeAll);
+        self::assertSame([], $recovered->observedSubscriptionState()->eventNames);
+        self::assertSame([
+            ['headerName' => 'Unique-ID', 'headerValue' => 'uuid-1'],
+        ], $recovered->observedSubscriptionState()->filters);
+        self::assertTrue($recovered->observedSubscriptionState()->isCurrentForActiveSession);
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
+    public function testRunnerFeedbackSnapshotExposesReconnectPhaseAndTimingDetail(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('filter Unique-ID uuid-reconnect-phase', $command);
+            $server->writeCommandReply($connection, '+OK filter added');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $this->loop->addTimer(0.02, function () use ($connection, $server): void {
+                $server->writeCommandReply($connection, '+OK accepted');
+            });
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $this->loop->addTimer(0.02, function () use ($connection, $server): void {
+                $server->writeCommandReply($connection, '+OK event listener enabled plain');
+            });
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('filter Unique-ID uuid-reconnect-phase', $command);
+            $this->loop->addTimer(0.02, function () use ($connection, $server): void {
+                $server->writeCommandReply($connection, '+OK filter added');
+            });
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: 'worker://node-a/session-reconnect-phase',
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.1),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+                connector: new Connector([], $this->loop),
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext('runtime-session-3'),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+        $this->await($handle->client()->subscriptions()->subscribeAll());
+        $this->await($handle->client()->subscriptions()->addFilter('Unique-ID', 'uuid-reconnect-phase'));
+
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::WaitingToRetry,
+            0.3,
+        );
+
+        $waiting = $handle->feedbackSnapshot()->reconnectState();
+        self::assertSame(RuntimeReconnectPhase::WaitingToRetry, $waiting->phase);
+        self::assertSame(1, $waiting->attemptNumber);
+        self::assertTrue($waiting->isRetryScheduled);
+        self::assertEqualsWithDelta(0.1, $waiting->backoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNotNull($waiting->nextRetryDueAtMicros);
+        self::assertNotNull($waiting->remainingDelaySeconds);
+        self::assertGreaterThan(0.0, $waiting->remainingDelaySeconds ?? 0.0);
+        self::assertLessThanOrEqual(($waiting->backoffDelaySeconds ?? 0.0) + 0.02, $waiting->remainingDelaySeconds ?? 0.0);
+        self::assertFalse($waiting->isTerminallyStopped);
+        self::assertFalse($waiting->isRetryExhausted);
+        self::assertFalse($waiting->requiresExternalIntervention);
+        self::assertFalse($waiting->isFailClosedTerminalState);
+        self::assertNull($waiting->terminalStopReason);
+        self::assertNull($waiting->terminalStoppedAtMicros);
+        self::assertNull($waiting->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($waiting->lastScheduledRetryDueAtMicros);
+        self::assertEqualsWithDelta(
+            $waiting->nextRetryDueAtMicros ?? 0.0,
+            $waiting->lastScheduledRetryDueAtMicros ?? 0.0,
+            1000.0,
+        );
+        self::assertEqualsWithDelta(0.1, $waiting->lastScheduledBackoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNull($waiting->terminalStoppedDurationSeconds);
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::AttemptingReconnect,
+            0.5,
+        );
+
+        $attempting = $handle->feedbackSnapshot()->reconnectState();
+        self::assertSame(RuntimeReconnectPhase::AttemptingReconnect, $attempting->phase);
+        self::assertSame(1, $attempting->attemptNumber);
+        self::assertFalse($attempting->isRetryScheduled);
+        self::assertEqualsWithDelta(0.1, $attempting->backoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNull($attempting->nextRetryDueAtMicros);
+        self::assertNull($attempting->remainingDelaySeconds);
+        self::assertFalse($attempting->isTerminallyStopped);
+        self::assertFalse($attempting->isRetryExhausted);
+        self::assertFalse($attempting->requiresExternalIntervention);
+        self::assertFalse($attempting->isFailClosedTerminalState);
+        self::assertNull($attempting->terminalStopReason);
+        self::assertNull($attempting->terminalStoppedAtMicros);
+        self::assertNotNull($attempting->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($attempting->lastScheduledRetryDueAtMicros);
+        self::assertEqualsWithDelta(0.1, $attempting->lastScheduledBackoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNull($attempting->terminalStoppedDurationSeconds);
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::RestoringSession,
+            0.5,
+        );
+
+        $restoring = $handle->feedbackSnapshot()->reconnectState();
+        self::assertSame(RuntimeReconnectPhase::RestoringSession, $restoring->phase);
+        self::assertSame(1, $restoring->attemptNumber);
+        self::assertFalse($restoring->isRetryScheduled);
+        self::assertEqualsWithDelta(0.1, $restoring->backoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNull($restoring->nextRetryDueAtMicros);
+        self::assertNull($restoring->remainingDelaySeconds);
+        self::assertFalse($restoring->isTerminallyStopped);
+        self::assertFalse($restoring->isRetryExhausted);
+        self::assertFalse($restoring->requiresExternalIntervention);
+        self::assertFalse($restoring->isFailClosedTerminalState);
+        self::assertNull($restoring->terminalStopReason);
+        self::assertNull($restoring->terminalStoppedAtMicros);
+        self::assertNotNull($restoring->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($restoring->lastScheduledRetryDueAtMicros);
+        self::assertEqualsWithDelta(0.1, $restoring->lastScheduledBackoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNull($restoring->terminalStoppedDurationSeconds);
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::Idle
+                && $handle->feedbackSnapshot()->connectionState() === ConnectionState::Authenticated,
+            1.0,
+        );
+
+        $recovered = $handle->feedbackSnapshot()->reconnectState();
+        self::assertSame(RuntimeReconnectPhase::Idle, $recovered->phase);
+        self::assertNull($recovered->attemptNumber);
+        self::assertFalse($recovered->isRetryScheduled);
+        self::assertNull($recovered->backoffDelaySeconds);
+        self::assertNull($recovered->nextRetryDueAtMicros);
+        self::assertNull($recovered->remainingDelaySeconds);
+        self::assertFalse($recovered->isTerminallyStopped);
+        self::assertFalse($recovered->isRetryExhausted);
+        self::assertFalse($recovered->requiresExternalIntervention);
+        self::assertFalse($recovered->isFailClosedTerminalState);
+        self::assertNull($recovered->terminalStopReason);
+        self::assertNull($recovered->terminalStoppedAtMicros);
+        self::assertNotNull($recovered->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($recovered->lastScheduledRetryDueAtMicros);
+        self::assertEqualsWithDelta(0.1, $recovered->lastScheduledBackoffDelaySeconds ?? 0.0, 0.02);
+        self::assertNull($recovered->terminalStoppedDurationSeconds);
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
     public function testRunnerReusesPreparedDialUriForReconnectAttempts(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -407,6 +825,18 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame('invalid password', $lifecycle->startupErrorMessage);
         self::assertSame(ConnectionState::Disconnected, $lifecycle->connectionState());
         self::assertSame(SessionState::Failed, $lifecycle->sessionState());
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame(RuntimeReconnectPhase::Idle, $feedback->reconnectState()->phase);
+        self::assertTrue($feedback->reconnectState()->isTerminallyStopped);
+        self::assertFalse($feedback->reconnectState()->isRetryExhausted);
+        self::assertTrue($feedback->reconnectState()->requiresExternalIntervention);
+        self::assertTrue($feedback->reconnectState()->isFailClosedTerminalState);
+        self::assertSame(RuntimeReconnectStopReason::AuthenticationRejected, $feedback->reconnectState()->terminalStopReason);
+        self::assertNotNull($feedback->reconnectState()->terminalStoppedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledBackoffDelaySeconds);
+        self::assertGreaterThanOrEqual(0.0, $feedback->reconnectState()->terminalStoppedDurationSeconds ?? -1.0);
         self::assertSame('starting', $markers[0]['runner']);
         self::assertSame('failed', $markers[array_key_last($markers)]['runner']);
         self::assertTrue($markers[array_key_last($markers)]['failed']);
@@ -476,8 +906,105 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertFalse($closed->isLive());
         self::assertFalse($closed->isDraining());
         self::assertTrue($closed->isStopped());
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame(RuntimeReconnectPhase::Idle, $feedback->reconnectState()->phase);
+        self::assertTrue($feedback->reconnectState()->isTerminallyStopped);
+        self::assertFalse($feedback->reconnectState()->isRetryExhausted);
+        self::assertTrue($feedback->reconnectState()->requiresExternalIntervention);
+        self::assertFalse($feedback->reconnectState()->isFailClosedTerminalState);
+        self::assertSame(RuntimeReconnectStopReason::ExplicitShutdown, $feedback->reconnectState()->terminalStopReason);
+        self::assertNotNull($feedback->reconnectState()->terminalStoppedAtMicros);
+        self::assertNotNull($feedback->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertEqualsWithDelta(0.05, $feedback->reconnectState()->lastScheduledBackoffDelaySeconds ?? 0.0, 0.01);
+        self::assertGreaterThanOrEqual(0.0, $feedback->reconnectState()->terminalStoppedDurationSeconds ?? -1.0);
+        self::assertGreaterThanOrEqual(
+            $feedback->reconnectState()->lastRetryAttemptStartedAtMicros ?? 0.0,
+            $feedback->reconnectState()->terminalStoppedAtMicros ?? 0.0,
+        );
 
         $server->close();
+    }
+
+    public function testRunnerFeedbackSnapshotExposesRetryExhaustedTerminalReconnectTruth(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+            private int $attempts = 0;
+
+            public function __construct(
+                private readonly LoopInterface $loop,
+                private readonly string $targetUri,
+            ) {}
+
+            public function connect($uri)
+            {
+                $this->attempts++;
+
+                if ($this->attempts === 1) {
+                    return (new Connector([], $this->loop))->connect($this->targetUri);
+                }
+
+                return \React\Promise\reject(new \RuntimeException('forced reconnect attempt failure'));
+            }
+        };
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(1, 0.01),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+                connector: $connector,
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext('runtime-session-exhausted'),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+
+        $server->closeActiveConnection();
+        $server->close();
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->isTerminallyStopped,
+            0.5,
+        );
+
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame(RuntimeReconnectPhase::Exhausted, $feedback->reconnectState()->phase);
+        self::assertTrue($feedback->reconnectState()->isTerminallyStopped);
+        self::assertTrue($feedback->reconnectState()->isRetryExhausted);
+        self::assertTrue($feedback->reconnectState()->requiresExternalIntervention);
+        self::assertTrue($feedback->reconnectState()->isFailClosedTerminalState);
+        self::assertSame(RuntimeReconnectStopReason::RetryExhausted, $feedback->reconnectState()->terminalStopReason);
+        self::assertFalse($feedback->reconnectState()->isRetryScheduled);
+        self::assertNotNull($feedback->reconnectState()->terminalStoppedAtMicros);
+        self::assertNotNull($feedback->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNotNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertEqualsWithDelta(0.01, $feedback->reconnectState()->lastScheduledBackoffDelaySeconds ?? 0.0, 0.005);
+        self::assertGreaterThanOrEqual(0.0, $feedback->reconnectState()->terminalStoppedDurationSeconds ?? -1.0);
+        self::assertGreaterThanOrEqual(
+            $feedback->reconnectState()->lastRetryAttemptStartedAtMicros ?? 0.0,
+            $feedback->reconnectState()->terminalStoppedAtMicros ?? 0.0,
+        );
+        self::assertEqualsWithDelta(
+            $feedback->reconnectState()->lastScheduledRetryDueAtMicros ?? 0.0,
+            $feedback->reconnectState()->lastRetryAttemptStartedAtMicros ?? 0.0,
+            5_000.0,
+        );
+        self::assertSame(ConnectionState::Disconnected, $feedback->connectionState());
+        self::assertSame(SessionState::Disconnected, $feedback->sessionState());
     }
 
     public function testRunnerLifecycleObservationRemainsTruthfulDuringEventAndBgapiActivity(): void
