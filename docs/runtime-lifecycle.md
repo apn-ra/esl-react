@@ -65,9 +65,15 @@ An opt-in live runner harness can validate the narrower reconnect + bgapi/event
 combined path when the lab supplies safe transport disrupt/restore commands:
 pre-fault live event delivery, reconnect/no-drain observation, desired
 subscription restoration, post-reconnect event delivery, and post-reconnect
-`bgapi()` completion all on the same public runner handle. Live
-pending-`bgapi()` in-flight fault injection across reconnect remains deferred
-unless a lab provides a safe long-running background job command.
+`bgapi()` completion all on the same public runner handle.
+An additional opt-in live runner harness can validate the narrower in-flight
+pending-`bgapi()` reconnect path itself: one safe bgapi job is kept pending,
+the runner transport is force-closed locally without entering explicit drain,
+the runner reports reconnect/disconnect truth without false drain, the pending
+job count stays non-zero across recovery, and the original handle later
+resolves on `BACKGROUND_JOB` completion after reconnect. The same harness can
+also use an external ESL-control fault such as `reload mod_event_socket` when
+the lab wants a separate reconnect trigger.
 Heartbeat/liveness degradation is regression-tested deterministically on the
 runner seam and can also be exercised by an opt-in live harness on relatively
 quiet targets, where the expected path is `Authenticated/live` ->

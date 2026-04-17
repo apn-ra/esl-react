@@ -537,8 +537,37 @@ fake-server suite covers pending `bgapi()` plus desired event subscriptions
 through unexpected reconnect, and pending `bgapi()` while heartbeat liveness
 degrades and recovers. Those tests assert no false drain, fail-closed new work
 while reconnecting, restored event flow after reconnect, and matching snapshot
-plus pushed lifecycle truth. Live pending-`bgapi()` in-flight fault injection
-remains deferred unless a lab provides a safe long-running background job.
+plus pushed lifecycle truth.
+
+An additional opt-in live runner pending-`bgapi()` reconnect harness is
+available for labs that can keep one safe background job genuinely pending while
+the ESL listener reconnects:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_PENDING_BGAPI_RECONNECT_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_RUNNER_PENDING_BGAPI_COMMAND=msleep \
+ESL_REACT_LIVE_RUNNER_PENDING_BGAPI_ARGS=15000 \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest.php
+```
+
+By default this harness force-closes the runner transport locally without
+calling the public `disconnect()` path, so the live FreeSWITCH target keeps
+processing the bgapi job while the runtime observes an unexpected reconnect.
+That makes it possible to prove a real pending `bgapi()` handle crossing the
+reconnect boundary: pending before fault, reconnecting/not-live without false
+drain, pending still tracked after recovery, and the original handle resolving
+later on `BACKGROUND_JOB` completion.
+
+This remains intentionally opt-in and lab-scoped. If your environment cannot
+use the default controlled transport-close fault, the harness also accepts a
+custom external disrupt command or a separate ESL-control fault command such as
+`reload mod_event_socket`. The still-deferred gap after this milestone is any
+broader external live fault injection beyond this one pending-job reconnect
+path.
 
 An additional opt-in live event receipt harness is available when a safe event source is expected:
 

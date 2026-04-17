@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-04-17
+
+### Added
+- Opt-in live runner pending-`bgapi()` reconnect harness for proving that one genuinely pending bgapi job can stay tracked across a reconnect boundary and still resolve on the original handle after recovery
+- Live validation coverage for pending-job truth before disruption, reconnect/no-drain lifecycle observation during the fault, pending job survival across recovery, and post-reconnect `BACKGROUND_JOB` completion on the public runner seam
+
+### Changed
+- Release-facing docs now distinguish the validated live pending-`bgapi()` reconnect path from the still-deferred broader external fault-injection space
+- The default live pending-`bgapi()` harness now uses a controlled unexpected transport close on the runner connection, while keeping optional external fault hooks available for lab-specific experiments
+
 ## [0.2.6] - 2026-04-17
 
 ### Added

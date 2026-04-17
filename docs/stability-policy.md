@@ -75,7 +75,8 @@ The following behaviors are considered stable even when the implementing types a
 - Live package-owned validation for runner startup and explicit drain-to-stop observation, plus live-verified opt-in automated reconnect recovery validation when safe disruption/restore commands are supplied by the environment
 - Deterministic and opt-in live runner-surface validation for event subscription plus `bgapi()` completion activity against real FreeSWITCH event and `BACKGROUND_JOB` traffic
 - Deterministic runner-surface validation for combined pending `bgapi()` plus event-subscription behavior during degraded liveness and reconnecting runtime states
-- Opt-in live runner-surface validation for the reconnect + bgapi/event combined path when safe lab disrupt/restore commands are available; live pending-`bgapi()` in-flight reconnect fault injection remains deferred
+- Opt-in live runner-surface validation for the reconnect + bgapi/event combined path when safe lab disrupt/restore commands are available; broader live fault injection beyond one safe pending-`bgapi()` reconnect path remains deferred
+- Opt-in live runner-surface validation for one genuinely pending `bgapi()` handle crossing a reconnect boundary through a controlled unexpected transport close, with optional support for an external non-process-killing reconnect fault such as `reload mod_event_socket`
 - Deterministic runner-surface validation for heartbeat/liveness degradation and recovery, with optional live lab validation on quiet targets
 - Deterministic runner-surface validation for the second-miss heartbeat dead/reconnect path, with optional live lab validation when the target can be made silent without immediate transport loss
 
