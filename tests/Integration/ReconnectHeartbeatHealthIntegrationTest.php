@@ -144,6 +144,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertSame(ConnectionState::Reconnecting, $recovering->connectionState);
         self::assertSame(SessionState::Disconnected, $recovering->sessionState);
         self::assertFalse($recovering->isLive);
+        self::assertFalse($recovering->isDraining);
         try {
             $this->await($client->api('status'));
             self::fail('Expected api() to fail while reconnecting');
@@ -178,6 +179,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertSame(ConnectionState::Authenticated, $live->connectionState);
         self::assertSame(SessionState::Active, $live->sessionState);
         self::assertTrue($live->isLive);
+        self::assertFalse($live->isDraining);
         self::assertSame(0, $live->reconnectAttempts);
 
         $server->close();
@@ -268,6 +270,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertSame(ConnectionState::Disconnected, $snapshot->connectionState);
         self::assertSame(SessionState::Disconnected, $snapshot->sessionState);
         self::assertFalse($snapshot->isLive);
+        self::assertFalse($snapshot->isDraining);
         self::assertSame(2, $snapshot->reconnectAttempts);
 
         $server->close();
@@ -303,6 +306,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertSame(ConnectionState::Authenticated, $degraded->connectionState);
         self::assertSame(SessionState::Active, $degraded->sessionState);
         self::assertFalse($degraded->isLive);
+        self::assertFalse($degraded->isDraining);
 
         $this->waitUntil(
             fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
@@ -313,6 +317,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertSame(ConnectionState::Disconnected, $disconnected->connectionState);
         self::assertSame(SessionState::Disconnected, $disconnected->sessionState);
         self::assertFalse($disconnected->isLive);
+        self::assertFalse($disconnected->isDraining);
         self::assertSame(['auth ClueCon', 'api status'], $server->receivedCommands());
 
         $server->close();
@@ -363,6 +368,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         $recovering = $client->health()->snapshot();
         self::assertSame(ConnectionState::Reconnecting, $recovering->connectionState);
         self::assertFalse($recovering->isLive);
+        self::assertFalse($recovering->isDraining);
 
         $this->waitUntil(
             fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated

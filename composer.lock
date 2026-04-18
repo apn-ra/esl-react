@@ -4,24 +4,24 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "18f850730cf1e17b02550fe1acb7d52d",
+    "content-hash": "27608c4ac7864396a04280d466d2d871",
     "packages": [
         {
             "name": "apntalk/esl-core",
-            "version": "v0.2.3",
+            "version": "v0.2.6",
             "source": {
                 "type": "git",
                 "url": "https://github.com/apn-ra/esl-core.git",
-                "reference": "0b3769e7d1eb027e520be0f38e9bef1b07d95a2c"
+                "reference": "930c340b917104b48229a89c5b6157461f8fa1ed"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/apn-ra/esl-core/zipball/0b3769e7d1eb027e520be0f38e9bef1b07d95a2c",
-                "reference": "0b3769e7d1eb027e520be0f38e9bef1b07d95a2c",
+                "url": "https://api.github.com/repos/apn-ra/esl-core/zipball/930c340b917104b48229a89c5b6157461f8fa1ed",
+                "reference": "930c340b917104b48229a89c5b6157461f8fa1ed",
                 "shasum": ""
             },
             "require": {
-                "php": "^8.3"
+                "php": "^8.1"
             },
             "require-dev": {
                 "friendsofphp/php-cs-fixer": "^3.58",
@@ -54,9 +54,9 @@
             ],
             "support": {
                 "issues": "https://github.com/apn-ra/esl-core/issues",
-                "source": "https://github.com/apn-ra/esl-core/tree/v0.2.3"
+                "source": "https://github.com/apn-ra/esl-core/tree/v0.2.6"
             },
-            "time": "2026-04-14T09:19:15+00:00"
+            "time": "2026-04-18T01:55:05+00:00"
         },
         {
             "name": "evenement/evenement",

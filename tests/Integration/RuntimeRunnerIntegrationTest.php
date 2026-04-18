@@ -8,11 +8,13 @@ use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslCore\Replies\ApiReply;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Bgapi\BgapiJobHandle;
+use Apntalk\EslReact\Config\CommandTimeoutConfig;
 use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Config\HeartbeatConfig;
 use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
+use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Exceptions\ConnectionLostException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
@@ -29,6 +31,7 @@ use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
 use React\EventLoop\LoopInterface;
 use React\Promise\Deferred;
+use React\Socket\ConnectionInterface;
 use React\Socket\Connector;
 use React\Socket\ConnectorInterface;
 
@@ -178,6 +181,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             0.2,
         );
 
+        $beforeTransportLossMarkerCount = count($markers);
         $server->closeActiveConnection();
 
         $this->waitUntil(
@@ -192,6 +196,21 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             },
             0.7,
         );
+
+        foreach (array_slice($markers, $beforeTransportLossMarkerCount) as $marker) {
+            if ($marker['connection'] === 'reconnecting') {
+                break;
+            }
+
+            self::assertFalse(
+                $marker['connection'] === 'disconnected'
+                && $marker['reconnecting'] === false
+                && $marker['draining'] === false
+                && $marker['stopped'] === false
+                && $marker['failed'] === false,
+                'Unexpected transport loss must not emit a non-terminal disconnected lifecycle marker before reconnecting',
+            );
+        }
 
         $this->waitUntil(
             function () use (&$markers): bool {
@@ -558,6 +577,70 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->close();
     }
 
+    public function testRunnerDisconnectWhileRetryScheduledCancelsReconnectWithoutDrain(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.05),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+        $server->closeActiveConnection();
+
+        $this->waitUntil(
+            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::WaitingToRetry,
+            0.2,
+        );
+
+        $scheduled = $handle->feedbackSnapshot();
+        self::assertSame(ConnectionState::Reconnecting, $scheduled->connectionState());
+        self::assertTrue($scheduled->isReconnectRetryScheduled());
+        self::assertFalse($scheduled->isDraining());
+        self::assertSame(1, $server->connectionCount());
+
+        $markerCountBeforeShutdown = count($markers);
+        $this->await($handle->client()->disconnect());
+        $this->runLoopFor(0.08);
+
+        $closed = $handle->feedbackSnapshot();
+        self::assertSame(ConnectionState::Closed, $closed->connectionState());
+        self::assertSame(SessionState::Disconnected, $closed->sessionState());
+        self::assertFalse($closed->isReconnectRetryScheduled());
+        self::assertSame(RuntimeReconnectPhase::Idle, $closed->reconnectState()->phase);
+        self::assertTrue($closed->reconnectState()->isTerminallyStopped);
+        self::assertFalse($closed->reconnectState()->isRetryExhausted);
+        self::assertTrue($closed->reconnectState()->requiresExternalIntervention);
+        self::assertFalse($closed->reconnectState()->isFailClosedTerminalState);
+        self::assertSame(RuntimeReconnectStopReason::ExplicitShutdown, $closed->reconnectState()->terminalStopReason);
+        self::assertSame(1, $server->connectionCount());
+
+        foreach (array_slice($markers, $markerCountBeforeShutdown) as $marker) {
+            self::assertFalse($marker['draining'], 'Shutdown during a pending retry must not enter drain mode');
+        }
+
+        $server->close();
+    }
+
     public function testRunnerFeedbackSnapshotExposesReconnectPhaseAndTimingDetail(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -857,6 +940,61 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->close();
     }
 
+    public function testRunnerFeedbackSnapshotExposesHandshakeTimeoutTerminalReconnectTruth(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop, autoAuthRequest: false);
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                    heartbeat: HeartbeatConfig::disabled(),
+                    commandTimeout: CommandTimeoutConfig::withApiTimeout(0.05),
+                ),
+            ),
+            $this->loop,
+        );
+
+        try {
+            $this->await($handle->startupPromise(), 0.3);
+            self::fail('Expected startup to fail on connect/auth handshake timeout');
+        } catch (CommandTimeoutException $e) {
+            self::assertSame('connect/auth handshake', $e->eslCommand());
+        }
+
+        self::assertSame(RuntimeRunnerState::Failed, $handle->state());
+        self::assertInstanceOf(CommandTimeoutException::class, $handle->startupError());
+
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame(ConnectionState::Disconnected, $feedback->connectionState());
+        self::assertSame(SessionState::Failed, $feedback->sessionState());
+        self::assertSame(RuntimeReconnectPhase::Idle, $feedback->reconnectState()->phase);
+        self::assertFalse($feedback->reconnectState()->isRetryScheduled);
+        self::assertTrue($feedback->reconnectState()->isTerminallyStopped);
+        self::assertFalse($feedback->reconnectState()->isRetryExhausted);
+        self::assertTrue($feedback->reconnectState()->requiresExternalIntervention);
+        self::assertTrue($feedback->reconnectState()->isFailClosedTerminalState);
+        self::assertSame(RuntimeReconnectStopReason::HandshakeTimeout, $feedback->reconnectState()->terminalStopReason);
+        self::assertNotNull($feedback->reconnectState()->terminalStoppedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledBackoffDelaySeconds);
+        self::assertGreaterThanOrEqual(0.0, $feedback->reconnectState()->terminalStoppedDurationSeconds ?? -1.0);
+
+        $status = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Failed, $status->phase);
+        self::assertFalse($status->isRuntimeActive);
+        self::assertFalse($status->isRecoveryInProgress);
+        self::assertSame(CommandTimeoutException::class, $status->lastFailureClass);
+        self::assertSame(RuntimeReconnectStopReason::HandshakeTimeout, $status->reconnectState->terminalStopReason);
+
+        $server->close();
+    }
+
     public function testRunnerLifecycleSnapshotObservesReconnectAndTerminalDisconnect(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -957,6 +1095,92 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($closedStatus->lastDisconnectReasonClass);
         self::assertNull($closedStatus->lastDisconnectReasonMessage);
 
+        $server->close();
+    }
+
+    public function testRunnerStatusPreservesTransportErrorCauseAcrossUnexpectedClose(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+            public ?ConnectionInterface $connection = null;
+
+            public function __construct(
+                private readonly LoopInterface $loop,
+                private readonly string $targetUri,
+            ) {}
+
+            public function connect($uri)
+            {
+                return (new Connector([], $this->loop))
+                    ->connect($this->targetUri)
+                    ->then(function (ConnectionInterface $connection): ConnectionInterface {
+                        $this->connection = $connection;
+
+                        return $connection;
+                    });
+            }
+        };
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.05),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+                connector: $connector,
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext('runtime-session-transport-error'),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+        self::assertInstanceOf(ConnectionInterface::class, $connector->connection);
+
+        $connector->connection->emit('error', [new \RuntimeException('forced transport error')]);
+        $connector->connection->close();
+
+        $this->waitUntil(
+            fn (): bool => $handle->statusSnapshot()->phase === RuntimeStatusPhase::Reconnecting,
+            0.2,
+        );
+
+        $reconnecting = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Reconnecting, $reconnecting->phase);
+        self::assertTrue($reconnecting->isRuntimeActive);
+        self::assertTrue($reconnecting->isRecoveryInProgress);
+        self::assertSame(\RuntimeException::class, $reconnecting->lastFailureClass);
+        self::assertSame('forced transport error', $reconnecting->lastFailureMessage);
+        self::assertSame(\RuntimeException::class, $reconnecting->lastDisconnectReasonClass);
+        self::assertSame('forced transport error', $reconnecting->lastDisconnectReasonMessage);
+        self::assertFalse($reconnecting->health->isDraining);
+
+        $this->waitUntil(
+            fn (): bool => $handle->statusSnapshot()->phase === RuntimeStatusPhase::Active
+                && $server->connectionCount() === 2,
+            0.5,
+        );
+
+        $recovered = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Active, $recovered->phase);
+        self::assertFalse($recovered->isRecoveryInProgress);
+        self::assertSame(\RuntimeException::class, $recovered->lastDisconnectReasonClass);
+        self::assertSame('forced transport error', $recovered->lastDisconnectReasonMessage);
+
+        $this->await($handle->client()->disconnect());
         $server->close();
     }
 

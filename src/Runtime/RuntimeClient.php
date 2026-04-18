@@ -649,6 +649,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         });
         $connection->on('error', function (\Throwable $e): void {
             $this->recordError($e);
+            $this->pendingCloseReason = $e;
         });
     }
 
@@ -656,6 +657,8 @@ final class RuntimeClient implements AsyncEslClientInterface
     {
         $reason ??= $this->pendingCloseReason;
         $this->pendingCloseReason = null;
+        $disconnectReason = $reason ?? new ConnectionLostException();
+        $willScheduleReconnect = $this->shouldScheduleReconnect($disconnectReason);
         $this->cancelConnectTimeout();
         $this->cancelDrainTimers();
         $this->heartbeat->stop();
@@ -664,7 +667,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->connection = null;
         $this->subscriptions->invalidateObservedState();
         $this->connectionState = $this->draining ? ConnectionState::Closed : ConnectionState::Disconnected;
-        if (!$this->draining) {
+        if (!$this->draining && !$willScheduleReconnect) {
             $this->reconnectPhase = RuntimeReconnectPhase::Idle;
         }
         if ($this->sessionState !== SessionState::Failed) {
@@ -672,8 +675,9 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
         $this->livenessState = LivenessState::Dead;
         $this->recordDisconnectObservation($reason);
-        $this->notifyLifecycleChange();
-        $disconnectReason = $reason ?? new ConnectionLostException();
+        if (!$willScheduleReconnect) {
+            $this->notifyLifecycleChange();
+        }
         if ($this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason)) {
             $this->commands->onConnectionLost();
             $this->bgapiTracker->retainPendingAcrossReconnect();
@@ -683,13 +687,13 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         if ($this->connectDeferred !== null) {
-            if ($this->shouldScheduleReconnect($disconnectReason)) {
+            if ($willScheduleReconnect) {
                 $this->scheduleReconnect($disconnectReason);
             } else {
                 $this->reconnectPhase = RuntimeReconnectPhase::Idle;
                 $this->settleConnectFailure($disconnectReason);
             }
-        } elseif ($this->shouldScheduleReconnect($disconnectReason)) {
+        } elseif ($willScheduleReconnect) {
             $this->scheduleReconnect($disconnectReason);
         } else {
             $this->reconnectPhase = RuntimeReconnectPhase::Idle;
@@ -749,6 +753,8 @@ final class RuntimeClient implements AsyncEslClientInterface
             $this->connectionState = ConnectionState::Disconnected;
             $this->sessionState = SessionState::Failed;
             $this->livenessState = LivenessState::Dead;
+            $this->reconnectStopReason = RuntimeReconnectStopReason::HandshakeTimeout;
+            $this->markReconnectTerminallyStopped();
             $this->notifyLifecycleChange();
             $this->recordError($error);
             $this->supervisionEnabled = false;

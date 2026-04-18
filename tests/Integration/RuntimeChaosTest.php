@@ -41,6 +41,11 @@ final class RuntimeChaosTest extends AsyncTestCase
         $api->then(null, static function (): void {
         });
 
+        $this->waitUntil(
+            fn (): bool => in_array('api status', $server->receivedCommands(), true),
+            0.2,
+        );
+
         $server->closeActiveConnection();
 
         try {
@@ -58,6 +63,80 @@ final class RuntimeChaosTest extends AsyncTestCase
         self::assertSame(ConnectionState::Disconnected, $snapshot->connectionState);
         self::assertSame(SessionState::Disconnected, $snapshot->sessionState);
         self::assertFalse($snapshot->isLive);
+
+        $server->close();
+    }
+
+    public function testInflightApiInterruptedByUnexpectedDisconnectRejectsAndRecoversWhenReconnectIsEnabled(): void
+    {
+        $server = $this->authenticatedServer();
+        $server->queueCommandHandler(static function ($connection, string $command): void {
+            self::assertSame('api status', $command);
+            // Leave the command unanswered; transport loss must reject it instead of waiting for timeout.
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $server->writeApiResponse($connection, "+OK after-reconnect\n");
+        });
+
+        $client = $this->authenticatedClient(
+            $server,
+            RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: $server->port(),
+                password: 'ClueCon',
+                retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                heartbeat: HeartbeatConfig::disabled(),
+            ),
+        );
+
+        $api = $client->api('status');
+        $api->then(null, static function (): void {
+        });
+
+        $this->waitUntil(
+            fn (): bool => count($server->receivedCommands()) >= 2
+                && $server->receivedCommands()[1] === 'api status',
+            0.2,
+        );
+
+        $server->closeActiveConnection();
+
+        try {
+            $this->await($api, 0.2);
+            self::fail('Expected in-flight api() to reject after unexpected disconnect');
+        } catch (ConnectionLostException) {
+        }
+
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            0.2,
+        );
+
+        $recovering = $client->health()->snapshot();
+        self::assertSame(ConnectionState::Reconnecting, $recovering->connectionState);
+        self::assertSame(SessionState::Disconnected, $recovering->sessionState);
+        self::assertFalse($recovering->isLive);
+        self::assertFalse($recovering->isDraining);
+
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+                && $server->connectionCount() === 2,
+            0.4,
+        );
+
+        $reply = $this->await($client->api('status'));
+        self::assertSame("+OK after-reconnect\n", $reply->body());
+
+        $recovered = $client->health()->snapshot();
+        self::assertSame(ConnectionState::Authenticated, $recovered->connectionState);
+        self::assertSame(SessionState::Active, $recovered->sessionState);
+        self::assertTrue($recovered->isLive);
+        self::assertFalse($recovered->isDraining);
 
         $server->close();
     }

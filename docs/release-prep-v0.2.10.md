@@ -1,7 +1,7 @@
-# Release Prep — v0.2.8 candidate
+# Release Prep — v0.2.10 candidate
 
 This note summarizes the accumulated runner-feedback and prepared-bootstrap
-integration-hardening work since `v0.2.7`.
+integration-hardening work since `v0.2.9`.
 
 It is intended as a checkpoint-oriented release note and tag-prep aid for the
 next release candidate on this line.
@@ -16,12 +16,16 @@ Implemented in this candidate:
 - explicit prepared-bootstrap replay capture injection
 - bounded runtime/session identity propagation
 - stable runner-facing `RuntimeFeedbackSnapshot`
+- stable runner-facing `RuntimeStatusSnapshot`
 - exact desired subscription/filter state
 - conservative observed current-session subscription/filter state
 - explicit reconnect retry scheduling truth
 - reconnect/backoff timing detail
 - explicit terminal reconnect-stop and retry-exhaustion truth
+- bounded disconnect/failure cause preservation across reconnect on the export-facing status seam
 - retained terminal reconnect timing context
+- explicit coarse lifecycle-callback vs richer feedback/status contract split
+- explicit drain-vs-unexpected-loss observation truth on the public runner seam
 - release-facing docs and contract coverage for those surfaces
 
 This checkpoint does not introduce:
@@ -36,15 +40,21 @@ This checkpoint does not introduce:
 
 The release-facing stable surfaces for this checkpoint are:
 
+- `RuntimeRunnerHandle::lifecycleSnapshot()`
+- `RuntimeRunnerHandle::onLifecycleChange()`
 - `RuntimeRunnerHandle::feedbackSnapshot()`
+- `RuntimeRunnerHandle::statusSnapshot()`
+- `RuntimeFeedbackProviderInterface`
+- `RuntimeStatusProviderInterface`
 - `RuntimeFeedbackSnapshot`
+- `RuntimeLifecycleSnapshot`
+- `RuntimeStatusSnapshot`
 - `RuntimeSubscriptionStateSnapshot`
 - `RuntimeObservedSubscriptionStateSnapshot`
 - `RuntimeReconnectStateSnapshot`
 - `RuntimeReconnectPhase`
 - `RuntimeReconnectStopReason`
 - `PreparedRuntimeReplayCaptureInputInterface`
-- `RuntimeFeedbackProviderInterface`
 
 Consumers should type against these documented contracts/read models rather
 than internal runtime implementation classes.
@@ -74,6 +84,9 @@ Use the runner feedback fields with these meanings:
 
 ### Reconnect transient vs terminal truth
 
+- unexpected transport loss is observed as reconnecting on the runner surfaces;
+  explicit drain remains a separate terminal shutdown path and should not be
+  conflated with reconnect
 - `reconnectState()` packages both transient reconnect timing and terminal stop
   state in one stable read model
 - `nextRetryDueAtMicros` and `remainingDelaySeconds` are approximate local
@@ -84,6 +97,20 @@ Use the runner feedback fields with these meanings:
 - `terminalStoppedDurationSeconds` is derived local elapsed time
 - `terminalStopReason` is a conservative runtime-known or policy-derived
   category, not a transport diagnostics taxonomy
+- handshake timeout is a fail-closed terminal reconnect-stop outcome; it does
+  not enter supervised reconnect first
+
+### Coarse lifecycle vs richer exported detail
+
+- `lifecycleSnapshot()` and `onLifecycleChange()` remain the stable coarse
+  observation seam for startup/liveness/reconnect/drain truth
+- `feedbackSnapshot()` is the richer read model for reconnect/backoff timing,
+  terminal stop semantics, and desired-vs-observed subscription state
+- `statusSnapshot()` is the export-oriented seam for bounded disconnect/failure
+  cause summaries and recent runtime-recorded transition timestamps
+- consumers should not infer that the coarse lifecycle callback omits failure
+  truth; it simply does not try to carry every bounded reconnect/status detail
+  that now lives on feedback/status snapshots
 
 ## Validation status for this checkpoint
 
@@ -122,7 +149,7 @@ Still deferred after this checkpoint:
 
 ## Tagging note
 
-Latest released tag on this line is `v0.2.7`.
+Latest released tag on this line is `v0.2.9`.
 
 The next checkpoint candidate for this accumulated surface is therefore
-`v0.2.8`, assuming no additional feature work is merged before tag prep.
+`v0.2.10`, assuming no additional feature work is merged before tag prep.

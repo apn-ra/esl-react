@@ -5,7 +5,7 @@ Status note: the connect/auth state transitions, unexpected-disconnect reconnect
 Hardening note for the implemented slice:
 
 - If `disconnect()` is called while `connect()` is still pending, the pending connect promise is rejected and the runtime moves to `Closed`/`Disconnected`.
-- If the connect/auth handshake does not complete before the current handshake timeout budget, `connect()` rejects with `CommandTimeoutException`, the runtime returns to `Disconnected`, and `SessionState` becomes `Failed`.
+- If the connect/auth handshake does not complete before the current handshake timeout budget, `connect()` rejects with `CommandTimeoutException`, the runtime returns to `Disconnected`, `SessionState` becomes `Failed`, and the runner reconnect/status surfaces report a terminal reconnect stop with `handshake_timeout` rather than entering supervised reconnect.
 - Unexpected or malformed inbound frames during the handshake fail closed and reject `connect()`.
 - After authentication succeeds, inbound event frames are delivered immediately on the live socket.
 - After an unexpected disconnect and successful re-authentication, the runtime restores the in-memory desired subscription baseline first and then restores filters before transitioning back to `Authenticated`/`Active`.

@@ -9,15 +9,16 @@ Current implementation status:
 - Implemented and test-covered: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
 - Implemented and contract-stabilized: replay-safe runtime hook emission for supported runtime paths.
 - Implemented and test-covered in the current runner milestones: a narrow prepared-input runner seam plus a richer prepared-bootstrap input path that can carry prepared ReactPHP transport access, prepared ingress pipeline access, and runtime-local session context.
-- Implemented and test-covered for higher-layer observation: runner lifecycle snapshots, exportable runner status snapshots, and push-based lifecycle callbacks that expose startup state, connection/session health, liveness, reconnecting, drain, failure truth, and recent runtime-owned status timestamps without giving downstream packages runtime ownership.
+- Implemented and test-covered for higher-layer observation: runner lifecycle snapshots, exportable runner status snapshots, and push-based lifecycle callbacks that expose startup state, connection/session health, liveness, reconnecting, drain, and failure truth without giving downstream packages runtime ownership. Recent runtime-owned connect/disconnect/failure timestamps and bounded cause summaries live on the status snapshot surface, not on the coarse lifecycle callback.
+- The runner observation contract is intentionally split: `lifecycleSnapshot()` / `onLifecycleChange()` stay coarse and stable for lifecycle observation, while `feedbackSnapshot()` and `statusSnapshot()` carry the richer reconnect/backoff timing, terminal-stop, and disconnect/failure-cause detail.
 - Present but still minimal relative to the plan: heartbeat orchestration beyond the current liveness probe and recover-on-silence behavior.
 - `connect()` is idempotent while a connection attempt is already in progress and resolves immediately when already authenticated.
 - `api()` is rejected before successful authentication.
-- The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`.
+- The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`, fails closed, stops autonomous reconnect for that startup attempt, and surfaces `handshake_timeout` on the runner reconnect/status snapshots.
 - `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
 Release-prep note for the current accumulated runner-feedback checkpoint:
-[docs/release-prep-v0.2.8.md](docs/release-prep-v0.2.8.md)
+[docs/release-prep-v0.2.10.md](docs/release-prep-v0.2.10.md)
 
 ---
 
@@ -59,7 +60,7 @@ These concerns belong to `apntalk/laravel-freeswitch-esl` or application code.
 - `react/event-loop` ^1.5
 - `react/promise` ^3.2
 - `react/socket` ^1.16
-- `apntalk/esl-core` ^0.2
+- `apntalk/esl-core` ^0.2.6
 
 ---
 
@@ -147,7 +148,7 @@ Lifecycle observer notes:
 - `onLifecycleChange()` invokes listeners immediately with the current `RuntimeLifecycleSnapshot`.
 - Later callbacks are emitted when coarse lifecycle truth changes, using the same snapshot shape as `lifecycleSnapshot()`.
 - Listener callbacks run synchronously in registration order, and listener exceptions are contained so they do not destabilize the runtime.
-- Explicit drain and unexpected transport-loss reconnect remain distinct on this surface: drain emits `Draining -> Closed`, while unexpected loss emits `Reconnecting` before any later recovery or exhaustion.
+- Explicit drain and unexpected transport-loss reconnect remain distinct on this surface: drain emits `Draining -> Closed`, while unexpected loss emits `Reconnecting` before any later recovery or exhaustion and does not emit a misleading shutdown-style drain marker first.
 
 Richer prepared-bootstrap example:
 

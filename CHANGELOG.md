@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 Latest checkpoint release prep note on this line:
-[docs/release-prep-v0.2.8.md](docs/release-prep-v0.2.8.md)
+[docs/release-prep-v0.2.10.md](docs/release-prep-v0.2.10.md)
 
 ### Added
 - Additive prepared-bootstrap replay-capture input contract so higher layers can inject runtime replay sinks on the runner seam without ad hoc `RuntimeConfig` wiring
@@ -16,13 +16,14 @@ Latest checkpoint release prep note on this line:
 - Clearer bounded runtime/session identity propagation via named `RuntimeSessionContext` fields plus generic scalar metadata reused by runner feedback and prepared-bootstrap replay metadata
 
 ### Changed
+- Runtime dependency now targets `apntalk/esl-core ^0.2.6`; the compatibility pass keeps `esl-react` on its existing ReactPHP runtime seams while validating the updated core parser, event/reply, replay, and prepared-bootstrap contracts
 - Runtime feedback semantics are now more explicit: runner feedback distinguishes exact desired subscription/filter state, exact reconnect retry scheduling truth, and exact command-bus active vs queued API counts without changing existing runtime behavior
 - Runner status semantics are now explicit: the new export seam distinguishes exact runtime-recorded connect/disconnect/failure timestamps from optional bounded disconnect-cause detail, and does not over-claim process-level loop liveness or cross-process supervision
 - Runtime feedback now also distinguishes exact desired subscription/filter state from conservative locally observed-applied state for the current authenticated session, with explicit invalidation on reconnect and rebuild after restore completes
 - Runtime feedback now also exposes additive reconnect/backoff detail, including exact reconnect phase and attempt/delay truth plus conservative local next-due and remaining-delay timing estimates when a retry timer is pending
 - Runtime feedback now also exposes additive terminal reconnect-stop truth, including exact terminal-stop/exhaustion booleans plus conservative runtime-known stop categories such as explicit shutdown, retry exhaustion/disabled retry, auth rejection, and handshake failure
 - Runtime feedback now also retains additive terminal reconnect timing context, including exact terminal-stop and retry-attempt timestamps plus last retained scheduler timing, while keeping elapsed-stop duration explicitly derived from local wall-clock packaging
-- Release-facing docs and public-contract coverage now package the accumulated runner feedback surface more explicitly, including desired vs observed subscription wording, exact vs approximate vs derived reconnect timing semantics, and the stable read models/enums downstream consumers should type against
+- Release-facing docs and public-contract coverage now package the accumulated runner feedback and status surfaces more explicitly, including desired vs observed subscription wording, exact vs approximate vs derived reconnect timing semantics, handshake-timeout terminal stop truth, preserved bounded disconnect-cause detail, and the intentional coarse lifecycle-callback vs richer feedback/status contract split
 
 ## [0.2.7] - 2026-04-17
 
