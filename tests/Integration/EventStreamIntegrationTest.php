@@ -245,7 +245,7 @@ final class EventStreamIntegrationTest extends AsyncTestCase
             'Event-Sequence: 77',
             'Unique-ID: uuid-fragmented',
             'Channel-Name: sofia%2Finternal%2F3000',
-        ]);
+        ]) . "\n\n";
         $frame = sprintf(
             "Content-Type: text/event-plain\nContent-Length: %d\n\n%s",
             strlen($body),

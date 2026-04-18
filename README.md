@@ -18,7 +18,7 @@ Current implementation status:
 - `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
 Release-prep note for the current accumulated runner-feedback checkpoint:
-[docs/release-prep-v0.2.10.md](docs/release-prep-v0.2.10.md)
+[docs/release-prep-v0.2.11.md](docs/release-prep-v0.2.11.md)
 
 ---
 
@@ -60,7 +60,8 @@ These concerns belong to `apntalk/laravel-freeswitch-esl` or application code.
 - `react/event-loop` ^1.5
 - `react/promise` ^3.2
 - `react/socket` ^1.16
-- `apntalk/esl-core` ^0.2.6
+- `apntalk/esl-core` ^0.2.13
+- `ext-dom` is required transitively by `apntalk/esl-core` ^0.2.10+
 
 ---
 

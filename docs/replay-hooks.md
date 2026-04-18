@@ -64,6 +64,7 @@ For dispatch-intent artifacts, `esl-react` emits replay envelopes directly using
 Every emitted artifact contains:
 
 - the standard `ReplayEnvelopeInterface` fields from `apntalk/esl-core`
+- the additive `ReplayEnvelopeInterface` truth accessors introduced in `apntalk/esl-core` `v0.2.13` such as `schemaVersion()`, `identityFacts()`, `orderingFacts()`, and `causalMetadata()`
 - `replay-artifact-version`
 - `replay-artifact-name`
 - `runtime-capture-path`

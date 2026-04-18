@@ -185,9 +185,9 @@ final class ScriptedFakeEslServer
             $eventHeaderLines[] = sprintf('%s: %s', $name, rawurlencode((string) $value));
         }
 
-        $eventPayload = implode("\n", $eventHeaderLines);
+        $eventPayload = implode("\n", $eventHeaderLines) . "\n\n";
         if ($body !== '') {
-            $eventPayload .= "\n\n" . $body;
+            $eventPayload .= $body;
         }
 
         $frame = sprintf(

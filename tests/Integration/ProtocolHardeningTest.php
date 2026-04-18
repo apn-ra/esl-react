@@ -30,7 +30,7 @@ final class ProtocolHardeningTest extends AsyncTestCase
                         'Event-Sequence: 900',
                         'Unique-ID: uuid-protocol-burst',
                         'Channel-Name: sofia%2Finternal%2F9000',
-                    ])),
+                    ]) . "\n\n"),
             );
         });
         $client = $this->authenticatedClient($server);

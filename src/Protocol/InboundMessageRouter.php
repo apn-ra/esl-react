@@ -83,16 +83,17 @@ final class InboundMessageRouter
                 return;
             }
 
-            // Reply path: AuthAccepted, AuthRejected, ApiResponse, BgapiAccepted, CommandAccepted, CommandError
+            // Reply path: AuthAccepted, ApiResponse, BgapiAccepted, CommandAccepted, CommandError.
+            // `esl-core` v0.2.13 no longer exposes a distinct public auth-rejected
+            // classification; auth `-ERR` stays on the command-error reply path.
             if (
                 $classified->isAuthAccepted() ||
-                $classified->isAuthRejected() ||
                 $classified->isApiResponse() ||
                 $classified->isBgapiAccepted() ||
                 $classified->isCommandAccepted() ||
                 $classified->isCommandError()
             ) {
-                $reply = $this->replyFactory->fromClassified($classified);
+                $reply = $this->replyFactory->fromClassification($classified);
                 $this->dispatch($this->onReplyHandler, $reply);
                 return;
             }

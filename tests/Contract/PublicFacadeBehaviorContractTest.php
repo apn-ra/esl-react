@@ -159,6 +159,9 @@ final class PublicFacadeBehaviorContractTest extends AsyncTestCase
             self::assertArrayHasKey('replay-artifact-name', $artifact->derivedMetadata());
             self::assertArrayHasKey('runtime-capture-path', $artifact->derivedMetadata());
             self::assertSame('1', $artifact->derivedMetadata()['replay-artifact-version']);
+            self::assertSame('replay-envelope.v1', $artifact->schemaVersion());
+            self::assertArrayHasKey('captured-type', $artifact->identityFacts());
+            self::assertArrayHasKey('capture-sequence', $artifact->orderingFacts());
             self::assertSame(
                 $artifact->derivedMetadata()['replay-artifact-name'],
                 $artifact->derivedMetadata()['runtime-capture-path'],

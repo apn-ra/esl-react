@@ -40,10 +40,12 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         self::assertSame('1', $captured[0]->derivedMetadata()['replay-artifact-version']);
         self::assertSame('api.dispatch', $captured[0]->derivedMetadata()['replay-artifact-name']);
         self::assertSame('api.dispatch', $captured[0]->derivedMetadata()['runtime-capture-path']);
+        self::assertSame('replay-envelope.v1', $captured[0]->schemaVersion());
         self::assertSame('dispatch', $captured[0]->capturedType());
         self::assertSame('api', $captured[0]->derivedMetadata()['runtime-command-type']);
         self::assertSame('status', $captured[0]->capturedName());
         self::assertSame('api status', $captured[0]->rawPayload());
+        self::assertSame('dispatch', $captured[0]->identityFacts()['captured-type']);
 
         self::assertSame('api.reply', $captured[1]->derivedMetadata()['replay-artifact-name']);
         self::assertSame('api.reply', $captured[1]->derivedMetadata()['runtime-capture-path']);
@@ -51,6 +53,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         self::assertSame('ApiReply', $captured[1]->capturedName());
         self::assertSame('authenticated', $captured[1]->derivedMetadata()['runtime-connection-state']);
         self::assertSame('1', $captured[1]->derivedMetadata()['runtime-connection-generation']);
+        self::assertSame((string) $captured[1]->captureSequence(), $captured[1]->orderingFacts()['capture-sequence']);
 
         $server->close();
     }

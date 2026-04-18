@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 Latest checkpoint release prep note on this line:
-[docs/release-prep-v0.2.10.md](docs/release-prep-v0.2.10.md)
+[docs/release-prep-v0.2.11.md](docs/release-prep-v0.2.11.md)
 
 ### Added
 - Additive prepared-bootstrap replay-capture input contract so higher layers can inject runtime replay sinks on the runner seam without ad hoc `RuntimeConfig` wiring
@@ -16,7 +16,7 @@ Latest checkpoint release prep note on this line:
 - Clearer bounded runtime/session identity propagation via named `RuntimeSessionContext` fields plus generic scalar metadata reused by runner feedback and prepared-bootstrap replay metadata
 
 ### Changed
-- Runtime dependency now targets `apntalk/esl-core ^0.2.6`; the compatibility pass keeps `esl-react` on its existing ReactPHP runtime seams while validating the updated core parser, event/reply, replay, and prepared-bootstrap contracts
+- Runtime dependency now targets `apntalk/esl-core ^0.2.13`; the compatibility pass keeps `esl-react` on its existing ReactPHP runtime seams while aligning the inbound reply router with the `v0.2.13` public classified-message contract and revalidating replay-envelope compatibility
 - Runtime feedback semantics are now more explicit: runner feedback distinguishes exact desired subscription/filter state, exact reconnect retry scheduling truth, and exact command-bus active vs queued API counts without changing existing runtime behavior
 - Runner status semantics are now explicit: the new export seam distinguishes exact runtime-recorded connect/disconnect/failure timestamps from optional bounded disconnect-cause detail, and does not over-claim process-level loop liveness or cross-process supervision
 - Runtime feedback now also distinguishes exact desired subscription/filter state from conservative locally observed-applied state for the current authenticated session, with explicit invalidation on reconnect and rebuild after restore completes
