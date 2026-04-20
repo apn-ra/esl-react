@@ -8,6 +8,7 @@ use Apntalk\EslCore\Commands\BgapiCommand;
 use Apntalk\EslCore\Contracts\CommandInterface;
 use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslCore\Replies\BgapiAcceptedReply;
+use Apntalk\EslCore\Vocabulary\InFlightOperationId;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
 use Closure;
 use React\Promise\Deferred;
@@ -26,6 +27,12 @@ final class BgapiDispatcher
         private readonly Closure $sendCommandReply,
         private readonly float $ackTimeoutSeconds,
         private readonly ?RuntimeReplayCapture $replayCapture = null,
+        /** @var null|Closure(PendingBgapiJob): void */
+        private readonly ?Closure $onAck = null,
+        /** @var null|Closure(PendingBgapiJob, Throwable): void */
+        private readonly ?Closure $onRejected = null,
+        /** @var null|Closure(PendingBgapiJob, BackgroundJobEvent): void */
+        private readonly ?Closure $onCompleted = null,
     ) {}
 
     /**
@@ -35,7 +42,7 @@ final class BgapiDispatcher
      * The jobUuid() on the handle will be empty until the command/reply ack
      * arrives asynchronously — consumers should rely on promise() for correlation.
      */
-    public function dispatch(string $command, string $args): BgapiJobHandle
+    public function dispatch(string $command, string $args, InFlightOperationId $operationId): BgapiJobHandle
     {
         $this->replayCapture?->captureBgapiDispatch($command, $args);
 
@@ -44,6 +51,7 @@ final class BgapiDispatcher
         $dispatchedAt = (float) (microtime(true) * 1_000_000);
         $jobUuid = '';
         $job = new PendingBgapiJob(
+            $operationId,
             null,
             $command,
             $args,
@@ -56,8 +64,9 @@ final class BgapiDispatcher
             function () use ($jobId): void {
                 unset($this->pendingJobs[$jobId]);
             },
-            function () use ($jobId): void {
+            function (Throwable $reason) use ($jobId, $job): void {
                 unset($this->pendingJobs[$jobId]);
+                ($this->onRejected)?->__invoke($job, $reason);
             },
         );
 
@@ -74,6 +83,7 @@ final class BgapiDispatcher
                 $jobUuid = $reply->jobUuid();
                 $job->assignJobUuid($jobUuid);
                 $this->tracker->register($job);
+                ($this->onAck)?->__invoke($job);
                 $this->replayCapture?->captureBgapiAck($job, $reply);
             },
             static function (Throwable $e) use ($job): void {
@@ -96,6 +106,7 @@ final class BgapiDispatcher
     {
         $job = $this->tracker->complete($event);
         if ($job instanceof PendingBgapiJob) {
+            ($this->onCompleted)?->__invoke($job, $event);
             $this->replayCapture?->captureBgapiCompletion($job, $event);
         }
     }

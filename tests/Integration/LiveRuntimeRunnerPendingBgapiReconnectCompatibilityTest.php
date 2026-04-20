@@ -130,6 +130,22 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
         self::assertFalse($pending->isDraining());
         self::assertFalse($pending->isStopped());
 
+        $pendingFeedback = $handle->feedbackSnapshot();
+        self::assertSame('in-flight', $pendingFeedback->queueState()->value);
+        self::assertSame('retryable', $pendingFeedback->recovery->retryPosture->value);
+        self::assertSame('not-draining', $pendingFeedback->recovery->drainPosture->value);
+        self::assertCount(1, $pendingFeedback->activeOperations);
+        self::assertSame('bgapi', $pendingFeedback->activeOperations[0]->kind);
+        self::assertSame('in-flight', $pendingFeedback->activeOperations[0]->queueState->value);
+        self::assertSame($job->jobUuid(), $pendingFeedback->activeOperations[0]->jobUuid);
+
+        $pendingStatus = $handle->statusSnapshot();
+        self::assertSame('active', $pendingStatus->phase->value);
+        self::assertCount(1, $pendingStatus->activeOperations);
+
+        $acceptedOperationId = $pendingFeedback->activeOperations[0]->operationId->toString();
+        $acceptedRecoveryGenerationId = $pendingFeedback->activeOperations[0]->recoveryGenerationId;
+
         $restored = false;
 
         try {
@@ -179,6 +195,21 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
                 ],
             );
 
+            $duringRecoveryFeedback = $handle->feedbackSnapshot();
+            self::assertSame('retrying', $duringRecoveryFeedback->recovery->retryPosture->value);
+            self::assertSame('not-draining', $duringRecoveryFeedback->recovery->drainPosture->value);
+            self::assertSame('hook-required', $duringRecoveryFeedback->recovery->reconstructionPosture->value);
+            self::assertSame('gap-detected', $duringRecoveryFeedback->recovery->replayContinuity->value);
+            self::assertTrue($duringRecoveryFeedback->recovery->isRecoverableAfterReconnect);
+            self::assertCount(1, $duringRecoveryFeedback->activeOperations);
+            self::assertSame($acceptedOperationId, $duringRecoveryFeedback->activeOperations[0]->operationId->toString());
+            self::assertSame($acceptedRecoveryGenerationId, $duringRecoveryFeedback->activeOperations[0]->recoveryGenerationId);
+            self::assertSame($job->jobUuid(), $duringRecoveryFeedback->activeOperations[0]->jobUuid);
+
+            $duringRecoveryStatus = $handle->statusSnapshot();
+            self::assertTrue($duringRecoveryStatus->isRecoveryInProgress);
+            self::assertCount(1, $duringRecoveryStatus->activeOperations);
+
             $this->waitUntil(function () use ($handle): bool {
                 $snapshot = $handle->lifecycleSnapshot();
 
@@ -202,6 +233,18 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
             self::assertSame(1, $recovered->health?->pendingBgapiJobCount);
             self::assertSame(['BACKGROUND_JOB'], $handle->client()->subscriptions()->activeEventNames());
 
+            $recoveredFeedback = $handle->feedbackSnapshot();
+            self::assertSame('retryable', $recoveredFeedback->recovery->retryPosture->value);
+            self::assertSame('not-draining', $recoveredFeedback->recovery->drainPosture->value);
+            self::assertSame('hook-required', $recoveredFeedback->recovery->reconstructionPosture->value);
+            self::assertSame('gap-detected', $recoveredFeedback->recovery->replayContinuity->value);
+            self::assertTrue($recoveredFeedback->recovery->isRecoverableAfterReconnect);
+            self::assertSame('recovered_after_reconnect', $recoveredFeedback->recovery->lastRecoveryOutcome);
+            self::assertCount(1, $recoveredFeedback->activeOperations);
+            self::assertSame($acceptedOperationId, $recoveredFeedback->activeOperations[0]->operationId->toString());
+            self::assertSame($acceptedRecoveryGenerationId, $recoveredFeedback->activeOperations[0]->recoveryGenerationId);
+            self::assertSame($job->jobUuid(), $recoveredFeedback->activeOperations[0]->jobUuid);
+
             $completion = $this->await($job->promise(), $bgapiTimeout);
             self::assertInstanceOf(BackgroundJobEvent::class, $completion);
             self::assertSame($job->jobUuid(), $completion->jobUuid());
@@ -215,6 +258,18 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
             self::assertFalse($afterCompletion->isDraining());
             self::assertFalse($afterCompletion->isStopped());
             self::assertSame(0, $afterCompletion->health?->pendingBgapiJobCount);
+
+            $completedFeedback = $handle->feedbackSnapshot();
+            self::assertSame([], $completedFeedback->activeOperations);
+            self::assertNotSame([], $completedFeedback->recentTerminalPublications);
+            self::assertSame($acceptedOperationId, $completedFeedback->recentTerminalPublications[0]->operationId);
+            self::assertSame('completed', $completedFeedback->recentTerminalPublications[0]->publication->terminalCause()->value);
+            self::assertSame('final', $completedFeedback->recentTerminalPublications[0]->publication->finality()->value);
+
+            $completedStatus = $handle->statusSnapshot();
+            self::assertFalse($completedStatus->isRecoveryInProgress);
+            self::assertSame([], $completedStatus->activeOperations);
+            self::assertNotSame([], $completedStatus->recentTerminalPublications);
 
             self::assertGreaterThanOrEqual(2, count(array_filter(
                 $markers,

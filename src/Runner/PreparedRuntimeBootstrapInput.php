@@ -6,17 +6,22 @@ namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslCore\Contracts\InboundPipelineInterface;
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
+use Apntalk\EslCore\Vocabulary\ReconstructionPosture;
+use Apntalk\EslCore\Vocabulary\RecoveryGenerationId;
+use Apntalk\EslCore\Vocabulary\ReplayContinuity;
 use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeRecoveryInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use InvalidArgumentException;
 use React\Socket\ConnectorInterface;
 
-final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInputInterface, PreparedRuntimeDialTargetInputInterface, PreparedRuntimeReplayCaptureInputInterface
+final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInputInterface, PreparedRuntimeDialTargetInputInterface, PreparedRuntimeReplayCaptureInputInterface, PreparedRuntimeRecoveryInputInterface
 {
     /** @var list<ReplayCaptureSinkInterface>|null */
     private readonly ?array $replayCaptureSinksOverride;
+    private readonly PreparedRuntimeRecoveryContext $recoveryContext;
 
     public function __construct(
         private readonly string $endpoint,
@@ -24,10 +29,16 @@ final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInp
         private readonly ConnectorInterface $connector,
         private readonly InboundPipelineInterface $inboundPipeline,
         private readonly RuntimeSessionContext $sessionContext,
+        ?PreparedRuntimeRecoveryContext $recoveryContext = null,
         private readonly ?string $dialUri = null,
         private readonly ?bool $replayCaptureEnabledOverride = null,
         ?array $replayCaptureSinksOverride = null,
     ) {
+        $this->recoveryContext = $recoveryContext ?? new PreparedRuntimeRecoveryContext(
+            generationId: RecoveryGenerationId::fromInteger(1),
+            reconstructionPosture: ReconstructionPosture::Native,
+            replayContinuity: ReplayContinuity::Continuous,
+        );
         $this->replayCaptureSinksOverride = $replayCaptureSinksOverride !== null
             ? array_values($replayCaptureSinksOverride)
             : null;
@@ -46,6 +57,15 @@ final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInp
 
         if ($this->replayCaptureEnabled() && $this->replayCaptureSinks() === []) {
             throw new InvalidArgumentException('replayCaptureSinks must not be empty when replay capture is enabled');
+        }
+
+        if (
+            $this->recoveryContext->acceptedOperationIds() !== []
+            && $this->recoveryContext->replayContinuity()->value === 'continuous'
+        ) {
+            throw new InvalidArgumentException(
+                'Prepared recovery context cannot claim continuous continuity for imported accepted operations.',
+            );
         }
     }
 
@@ -72,6 +92,11 @@ final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInp
     public function sessionContext(): RuntimeSessionContext
     {
         return $this->sessionContext;
+    }
+
+    public function recoveryContext(): PreparedRuntimeRecoveryContext
+    {
+        return $this->recoveryContext;
     }
 
     public function dialUri(): string

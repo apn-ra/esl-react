@@ -6,9 +6,14 @@ namespace Apntalk\EslReact\Tests\Unit\Runner;
 
 use Apntalk\EslCore\Contracts\InboundPipelineInterface;
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
+use Apntalk\EslCore\Vocabulary\ReconstructionPosture;
+use Apntalk\EslCore\Vocabulary\RecoveryGenerationId;
+use Apntalk\EslCore\Vocabulary\ReplayContinuity;
 use Apntalk\EslReact\Config\RuntimeConfig;
+use Apntalk\EslReact\Contracts\PreparedRuntimeRecoveryInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
+use Apntalk\EslReact\Runner\PreparedRuntimeRecoveryContext;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
@@ -110,6 +115,46 @@ final class PreparedRuntimeBootstrapInputTest extends TestCase
             inboundPipeline: $this->createMock(InboundPipelineInterface::class),
             sessionContext: new RuntimeSessionContext('runner-session-1'),
             replayCaptureEnabledOverride: true,
+        );
+    }
+
+    public function testPreparedBootstrapInputImplementsPreparedRecoveryContract(): void
+    {
+        $input = new PreparedRuntimeBootstrapInput(
+            endpoint: 'worker://node-a/session-1',
+            runtimeConfig: RuntimeConfig::create(host: '127.0.0.1', port: 9090, password: 'ClueCon'),
+            connector: $this->createMock(ConnectorInterface::class),
+            inboundPipeline: $this->createMock(InboundPipelineInterface::class),
+            sessionContext: new RuntimeSessionContext('runner-session-1'),
+            recoveryContext: new PreparedRuntimeRecoveryContext(
+                generationId: RecoveryGenerationId::fromString('recovery-7'),
+                reconstructionPosture: ReconstructionPosture::HookRequired,
+                replayContinuity: ReplayContinuity::Reconstructed,
+                metadata: ['source' => 'fixture'],
+            ),
+        );
+
+        self::assertInstanceOf(PreparedRuntimeRecoveryInputInterface::class, $input);
+        self::assertSame('recovery-7', $input->recoveryContext()->generationId()->toString());
+    }
+
+    public function testPreparedBootstrapInputRejectsContinuousImportedAcceptedOperations(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('continuous continuity');
+
+        new PreparedRuntimeBootstrapInput(
+            endpoint: 'worker://node-a/session-1',
+            runtimeConfig: RuntimeConfig::create(host: '127.0.0.1', port: 9090, password: 'ClueCon'),
+            connector: $this->createMock(ConnectorInterface::class),
+            inboundPipeline: $this->createMock(InboundPipelineInterface::class),
+            sessionContext: new RuntimeSessionContext('runner-session-1'),
+            recoveryContext: new PreparedRuntimeRecoveryContext(
+                generationId: RecoveryGenerationId::fromString('recovery-8'),
+                reconstructionPosture: ReconstructionPosture::HookRequired,
+                replayContinuity: ReplayContinuity::Continuous,
+                acceptedOperationIds: ['api-g7-1'],
+            ),
         );
     }
 }

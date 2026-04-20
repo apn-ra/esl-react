@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
 
+use Apntalk\EslCore\Vocabulary\QueueState;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Health\HealthSnapshot;
 use Apntalk\EslReact\Session\SessionState;
@@ -23,6 +24,20 @@ final class RuntimeFeedbackSnapshot
         public readonly RuntimeSubscriptionStateSnapshot $subscriptionState = new RuntimeSubscriptionStateSnapshot(false, [], []),
         public readonly RuntimeObservedSubscriptionStateSnapshot $observedSubscriptionState = new RuntimeObservedSubscriptionStateSnapshot(false, [], [], false),
         public readonly RuntimeReconnectStateSnapshot $reconnectState = new RuntimeReconnectStateSnapshot(),
+        public readonly RuntimeRecoverySnapshot $recovery = new RuntimeRecoverySnapshot(
+            generationId: new \Apntalk\EslCore\Vocabulary\RecoveryGenerationId('1'),
+            connectionGeneration: 0,
+            retryPosture: \Apntalk\EslCore\Vocabulary\RetryPosture::Unknown,
+            drainPosture: \Apntalk\EslCore\Vocabulary\DrainPosture::Unknown,
+            reconstructionPosture: \Apntalk\EslCore\Vocabulary\ReconstructionPosture::Provisional,
+            replayContinuity: \Apntalk\EslCore\Vocabulary\ReplayContinuity::Unknown,
+        ),
+        /** @var list<RuntimeOperationSnapshot> */
+        public readonly array $activeOperations = [],
+        /** @var list<RuntimeTerminalPublicationSnapshot> */
+        public readonly array $recentTerminalPublications = [],
+        /** @var list<RuntimeLifecycleSemanticSnapshot> */
+        public readonly array $recentLifecycleSemantics = [],
         public readonly int $activeApiCommandCount = 0,
         public readonly int $queuedApiCommandCount = 0,
         public readonly bool $isReconnectRetryScheduled = false,
@@ -84,6 +99,25 @@ final class RuntimeFeedbackSnapshot
     public function totalInflightCount(): int
     {
         return $this->health->totalInflightCount;
+    }
+
+    public function queueState(): QueueState
+    {
+        if ($this->health->isDraining) {
+            return $this->health->totalInflightCount > 0
+                ? QueueState::Draining
+                : QueueState::Drained;
+        }
+
+        if ($this->queuedApiCommandCount > 0) {
+            return QueueState::Queued;
+        }
+
+        if ($this->activeApiCommandCount > 0 || $this->health->pendingBgapiJobCount > 0) {
+            return QueueState::InFlight;
+        }
+
+        return QueueState::NotQueued;
     }
 
     public function isOverloaded(): bool

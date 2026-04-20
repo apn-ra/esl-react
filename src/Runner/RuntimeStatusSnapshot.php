@@ -23,6 +23,13 @@ final class RuntimeStatusSnapshot implements JsonSerializable
         public readonly RuntimeStatusPhase $phase,
         public readonly HealthSnapshot $health,
         public readonly RuntimeReconnectStateSnapshot $reconnectState,
+        public readonly RuntimeRecoverySnapshot $recovery,
+        /** @var list<RuntimeOperationSnapshot> */
+        public readonly array $activeOperations,
+        /** @var list<RuntimeTerminalPublicationSnapshot> */
+        public readonly array $recentTerminalPublications,
+        /** @var list<RuntimeLifecycleSemanticSnapshot> */
+        public readonly array $recentLifecycleSemantics,
         public readonly bool $isRuntimeActive,
         public readonly bool $isRecoveryInProgress,
         public readonly ?float $lastSuccessfulConnectAtMicros,
@@ -55,6 +62,19 @@ final class RuntimeStatusSnapshot implements JsonSerializable
             'session_state' => $this->health->sessionState->value,
             'is_runtime_active' => $this->isRuntimeActive,
             'is_recovery_in_progress' => $this->isRecoveryInProgress,
+            'recovery' => $this->recovery->toArray(),
+            'active_operations' => array_map(
+                static fn(RuntimeOperationSnapshot $snapshot): array => $snapshot->toArray(),
+                $this->activeOperations,
+            ),
+            'recent_terminal_publications' => array_map(
+                static fn(RuntimeTerminalPublicationSnapshot $snapshot): array => $snapshot->toArray(),
+                $this->recentTerminalPublications,
+            ),
+            'recent_lifecycle_semantics' => array_map(
+                static fn(RuntimeLifecycleSemanticSnapshot $snapshot): array => $snapshot->toArray(),
+                $this->recentLifecycleSemantics,
+            ),
             'is_connected' => $this->health->isConnected(),
             'is_authenticated' => $this->health->isAuthenticated(),
             'is_live' => $this->health->isLive,

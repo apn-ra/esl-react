@@ -76,12 +76,12 @@ final class LiveRuntimeRunnerBgapiEventCompatibilityTest extends AsyncTestCase
             }
         }
 
-        $bgapiCommand = $this->envString('ESL_REACT_LIVE_RUNNER_BGAPI_COMMAND', $this->envString('ESL_REACT_LIVE_BGAPI_COMMAND', 'status'));
+        $bgapiCommand = $this->envString('ESL_REACT_LIVE_RUNNER_BGAPI_COMMAND', $this->envString('ESL_REACT_LIVE_BGAPI_COMMAND', 'msleep'));
         $bgapiArgs = getenv('ESL_REACT_LIVE_RUNNER_BGAPI_ARGS');
         if (!is_string($bgapiArgs)) {
             $bgapiArgs = getenv('ESL_REACT_LIVE_BGAPI_ARGS');
             if (!is_string($bgapiArgs)) {
-                $bgapiArgs = '';
+                $bgapiArgs = '1000';
             }
         }
 
@@ -146,9 +146,29 @@ final class LiveRuntimeRunnerBgapiEventCompatibilityTest extends AsyncTestCase
         self::assertSame($bgapiArgs, $job->eslArgs());
 
         $this->waitUntil(
-            fn(): bool => $job->jobUuid() !== '',
+            fn(): bool => $job->jobUuid() !== '' && $handle->feedbackSnapshot()->activeOperations !== [],
             6.0,
         );
+
+        $pendingFeedback = $handle->feedbackSnapshot();
+        self::assertSame('in-flight', $pendingFeedback->queueState()->value);
+        self::assertSame(1, $pendingFeedback->pendingBgapiJobCount());
+        self::assertCount(1, $pendingFeedback->activeOperations);
+        self::assertSame('bgapi', $pendingFeedback->activeOperations[0]->kind);
+        self::assertSame('in-flight', $pendingFeedback->activeOperations[0]->queueState->value);
+        self::assertSame($job->jobUuid(), $pendingFeedback->activeOperations[0]->jobUuid);
+        self::assertSame(
+            $pendingFeedback->recovery->generationId->toString(),
+            $pendingFeedback->activeOperations[0]->recoveryGenerationId,
+        );
+
+        $pendingStatus = $handle->statusSnapshot();
+        self::assertSame('active', $pendingStatus->phase->value);
+        self::assertCount(1, $pendingStatus->activeOperations);
+        self::assertSame($job->jobUuid(), $pendingStatus->activeOperations[0]->jobUuid);
+        self::assertSame('in-flight', $pendingStatus->toArray()['active_operations'][0]['queue_state']);
+
+        $activeOperationId = $pendingFeedback->activeOperations[0]->operationId->toString();
 
         $this->assertLiveLifecycle($handle->lifecycleSnapshot());
 
@@ -163,6 +183,32 @@ final class LiveRuntimeRunnerBgapiEventCompatibilityTest extends AsyncTestCase
         $afterActivity = $handle->lifecycleSnapshot();
         $this->assertLiveLifecycle($afterActivity);
         self::assertSame(0, $afterActivity->health?->pendingBgapiJobCount);
+
+        $completedFeedback = $handle->feedbackSnapshot();
+        self::assertSame('not-queued', $completedFeedback->queueState()->value);
+        self::assertSame([], $completedFeedback->activeOperations);
+        self::assertNotSame([], $completedFeedback->recentTerminalPublications);
+        self::assertSame(
+            $activeOperationId,
+            $completedFeedback->recentTerminalPublications[0]->operationId,
+        );
+        self::assertSame(
+            'completed',
+            $completedFeedback->recentTerminalPublications[0]->publication->terminalCause()->value,
+        );
+        self::assertSame(
+            'final',
+            $completedFeedback->recentTerminalPublications[0]->publication->finality()->value,
+        );
+
+        $completedStatus = $handle->statusSnapshot();
+        self::assertSame('active', $completedStatus->phase->value);
+        self::assertSame([], $completedStatus->activeOperations);
+        self::assertNotSame([], $completedStatus->recentTerminalPublications);
+        self::assertSame(
+            'completed',
+            $completedStatus->toArray()['recent_terminal_publications'][0]['publication']['terminalCause'],
+        );
 
         self::assertSame([], array_filter(
             $markers,

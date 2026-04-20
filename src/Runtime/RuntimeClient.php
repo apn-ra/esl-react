@@ -7,11 +7,23 @@ namespace Apntalk\EslReact\Runtime;
 use Apntalk\EslCore\Commands\ApiCommand;
 use Apntalk\EslCore\Commands\AuthCommand;
 use Apntalk\EslCore\Commands\ExitCommand;
+use Apntalk\EslCore\Contracts\EventInterface;
+use Apntalk\EslCore\Contracts\ProvidesNormalizedSubstrateInterface;
 use Apntalk\EslCore\Contracts\ReplyInterface;
 use Apntalk\EslCore\Events\BackgroundJobEvent;
+use Apntalk\EslCore\Events\BridgeEvent;
+use Apntalk\EslCore\Events\HangupEvent;
 use Apntalk\EslCore\Inbound\DecodedInboundMessage;
 use Apntalk\EslCore\Replies\AuthAcceptedReply;
 use Apntalk\EslCore\Replies\ErrorReply;
+use Apntalk\EslCore\Vocabulary\BoundedVarianceMarker;
+use Apntalk\EslCore\Vocabulary\FinalityMarker;
+use Apntalk\EslCore\Vocabulary\InFlightOperationId;
+use Apntalk\EslCore\Vocabulary\LifecycleSemanticState;
+use Apntalk\EslCore\Vocabulary\LifecycleTransition;
+use Apntalk\EslCore\Vocabulary\PublicationSource;
+use Apntalk\EslCore\Vocabulary\QueueState;
+use Apntalk\EslCore\Vocabulary\TerminalCause;
 use Apntalk\EslReact\Bgapi\BgapiDispatcher;
 use Apntalk\EslReact\Bgapi\BgapiJobHandle;
 use Apntalk\EslReact\Bgapi\BgapiJobTracker;
@@ -35,8 +47,12 @@ use Apntalk\EslReact\Heartbeat\LivenessState;
 use Apntalk\EslReact\Protocol\InboundMessagePump;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
+use Apntalk\EslReact\Runner\RuntimeLifecycleSemanticSnapshot;
+use Apntalk\EslReact\Runner\RuntimeOperationSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
 use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
+use Apntalk\EslReact\Runner\RuntimeRecoverySnapshot;
+use Apntalk\EslReact\Runner\RuntimeTerminalPublicationSnapshot;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
 use Apntalk\EslReact\Supervisor\ReconnectScheduler;
@@ -86,6 +102,9 @@ final class RuntimeClient implements AsyncEslClientInterface
     private ?string $lastDisconnectReasonClass = null;
     private ?string $lastDisconnectReasonMessage = null;
     private ?float $lastFailureAtMicros = null;
+    /** @var list<InFlightOperationId> */
+    private array $apiOperationQueue = [];
+    private ?InFlightOperationId $activeApiOperationId = null;
 
     public function __construct(
         private readonly RuntimeConfig $config,
@@ -102,9 +121,12 @@ final class RuntimeClient implements AsyncEslClientInterface
         private readonly ReconnectScheduler $reconnects,
         private readonly HeartbeatMonitor $heartbeat,
         private readonly RuntimeReplayCapture $replay,
+        private readonly RuntimeTruthRegistry $truth,
     ) {
         $this->wireProtocol();
         $this->wireHeartbeat();
+        $this->truth->markIdleRetryPosture($this->config->retryPolicy->enabled);
+        $this->truth->markPreparedRecoveryApplied();
     }
 
     public function attachHealthReporter(RuntimeHealthReporter $health): void
@@ -164,19 +186,35 @@ final class RuntimeClient implements AsyncEslClientInterface
             return reject($e);
         }
 
+        $operationId = $this->truth->nextOperationId('api');
+        $acceptedAsInflight = $this->activeApiOperationId === null;
+        if ($acceptedAsInflight) {
+            $this->activeApiOperationId = $operationId;
+        } else {
+            $this->apiOperationQueue[] = $operationId;
+        }
+        $this->truth->recordAcceptedOperation(
+            operationId: $operationId,
+            kind: 'api',
+            queueState: $acceptedAsInflight ? QueueState::InFlight : QueueState::Queued,
+            connectionGeneration: $this->connectionGeneration,
+        );
         $this->replay->captureApiDispatch($command, $args);
 
         return $this->commands->dispatch(
             new ApiCommand($command, $args),
             trim("api {$command} {$args}"),
             $this->config->commandTimeout->apiTimeoutSeconds,
-        )->then(function ($reply) use ($command) {
+        )->then(function ($reply) use ($command, $operationId) {
             if (!$reply instanceof \Apntalk\EslCore\Replies\ApiReply) {
                 throw new ConnectionException(sprintf('Expected ApiReply for api %s, got %s', $command, get_debug_type($reply)));
             }
 
+            $this->settleApiOperation($operationId, null);
+
             return $reply;
-        }, function (Throwable $e) {
+        }, function (Throwable $e) use ($operationId) {
+            $this->settleApiOperation($operationId, $e);
             $this->recordError($e);
             throw $e;
         });
@@ -186,7 +224,18 @@ final class RuntimeClient implements AsyncEslClientInterface
     {
         $this->assertCanAcceptNewWork();
 
-        $handle = $this->bgapi->dispatch($command, $args);
+        $operationId = $this->truth->nextOperationId('bgapi');
+        $queueState = $this->commands->totalPendingCount() > 0
+            ? QueueState::Queued
+            : QueueState::InFlight;
+        $this->truth->recordAcceptedOperation(
+            operationId: $operationId,
+            kind: 'bgapi',
+            queueState: $queueState,
+            connectionGeneration: $this->connectionGeneration,
+        );
+
+        $handle = $this->bgapi->dispatch($command, $args, $operationId);
         $handle->promise()->then(
             function (): void {
                 $this->maybeFinalizeDrain();
@@ -227,6 +276,8 @@ final class RuntimeClient implements AsyncEslClientInterface
         if ($this->connectDeferred !== null && $this->connection === null) {
             $disconnectReason = new ConnectionLostException('Disconnect requested before auth completed');
             $this->draining = true;
+            $this->truth->requestDrain('disconnect_before_auth_completed');
+            $this->truth->markDrainComplete();
             $this->supervisionEnabled = false;
             $this->reconnects->cancel();
             $this->reconnectScheduled = false;
@@ -248,6 +299,8 @@ final class RuntimeClient implements AsyncEslClientInterface
         }
 
         if ($this->connection === null) {
+            $this->truth->requestDrain('disconnect_without_active_connection');
+            $this->truth->markDrainComplete();
             $this->supervisionEnabled = false;
             $this->reconnects->cancel();
             $this->reconnectScheduled = false;
@@ -271,6 +324,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->reconnectPhase = RuntimeReconnectPhase::Idle;
         $this->reconnectStopReason = RuntimeReconnectStopReason::ExplicitShutdown;
         $this->markReconnectTerminallyStopped();
+        $this->truth->requestDrain('explicit_disconnect');
         $this->heartbeat->stop();
         $this->commands->enterDrainMode();
         $this->connectionState = ConnectionState::Draining;
@@ -344,6 +398,35 @@ final class RuntimeClient implements AsyncEslClientInterface
     public function isReconnectRetryScheduled(): bool
     {
         return $this->reconnectScheduled;
+    }
+
+    public function recoverySnapshot(): RuntimeRecoverySnapshot
+    {
+        return $this->truth->recoverySnapshot($this->connectionGeneration);
+    }
+
+    /**
+     * @return list<RuntimeOperationSnapshot>
+     */
+    public function activeOperations(): array
+    {
+        return $this->truth->activeOperations();
+    }
+
+    /**
+     * @return list<RuntimeTerminalPublicationSnapshot>
+     */
+    public function recentTerminalPublications(): array
+    {
+        return $this->truth->recentTerminalPublications();
+    }
+
+    /**
+     * @return list<RuntimeLifecycleSemanticSnapshot>
+     */
+    public function recentLifecycleSemantics(): array
+    {
+        return $this->truth->recentLifecycleSemantics();
     }
 
     /**
@@ -482,6 +565,15 @@ final class RuntimeClient implements AsyncEslClientInterface
             0,
             $reason,
         );
+        if ($this->activeApiOperationId !== null) {
+            $this->truth->settleOperation(
+                $this->activeApiOperationId,
+                PublicationSource::CommandReply,
+                TerminalCause::TimedOut,
+                FinalityMarker::Ambiguous,
+                $this->connectionGeneration,
+            );
+        }
         $this->connection->close();
     }
 
@@ -587,6 +679,14 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->pendingCloseReason = null;
         $disconnectReason = $reason ?? new ConnectionLostException();
         $willScheduleReconnect = $this->shouldScheduleReconnect($disconnectReason);
+        if ($willScheduleReconnect) {
+            $this->truth->beginReconnect($disconnectReason::class);
+        } elseif ($this->reconnectStopReason !== RuntimeReconnectStopReason::ExplicitShutdown) {
+            $this->truth->markRecoveryFailedTerminal(
+                $disconnectReason::class,
+                $this->truth->hasPreparedRecoveryContext(),
+            );
+        }
         $this->cancelConnectTimeout();
         $this->cancelDrainTimers();
         $this->heartbeat->stop();
@@ -606,7 +706,26 @@ final class RuntimeClient implements AsyncEslClientInterface
         if (!$willScheduleReconnect) {
             $this->notifyLifecycleChange();
         }
-        if ($this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason)) {
+        $keepBgapiPending = $this->shouldKeepBgapiPendingAcrossDisconnect($disconnectReason);
+        foreach ($this->truth->activeOperations() as $operation) {
+            if ($this->draining) {
+                $this->truth->markOperationDraining($operation->operationId, $this->connectionGeneration);
+                continue;
+            }
+
+            if ($keepBgapiPending && $operation->kind === 'bgapi') {
+                continue;
+            }
+
+            $this->truth->settleOperation(
+                $operation->operationId,
+                PublicationSource::CommandReply,
+                TerminalCause::Disconnected,
+                FinalityMarker::Ambiguous,
+                $this->connectionGeneration,
+            );
+        }
+        if ($keepBgapiPending) {
             $this->commands->onConnectionLost();
             $this->bgapiTracker->retainPendingAcrossReconnect();
         } else {
@@ -635,6 +754,7 @@ final class RuntimeClient implements AsyncEslClientInterface
 
         if ($this->connectionState === ConnectionState::Closed && $this->draining) {
             $this->draining = false;
+            $this->truth->markDrainComplete();
             $this->notifyLifecycleChange();
         }
 
@@ -659,6 +779,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         if ($message->isEvent()) {
             $event = $message->event();
             if ($event !== null) {
+                $this->recordSemanticEvent($event);
                 $this->events->handleEvent($event);
             }
             return;
@@ -875,6 +996,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->recordError($error);
                 $this->livenessState = LivenessState::Dead;
                 $this->reconnectStopReason = null;
+                $this->truth->beginReconnect($error::class);
                 $this->notifyLifecycleChange();
 
                 if ($this->shouldScheduleReconnect($error)) {
@@ -885,6 +1007,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $this->reconnectPhase = RuntimeReconnectPhase::Idle;
                 $this->reconnectStopReason = $this->classifyTerminalStopReasonAfterConnectFailure();
                 $this->markReconnectTerminallyStopped();
+                $this->truth->markRecoveryFailedTerminal($error::class, $this->truth->hasPreparedRecoveryContext());
                 $this->connectionState = ConnectionState::Disconnected;
                 $this->sessionState = SessionState::Failed;
                 $this->notifyLifecycleChange();
@@ -914,6 +1037,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 ? RuntimeReconnectStopReason::RetryExhausted
                 : RuntimeReconnectStopReason::RetryDisabled;
             $this->markReconnectTerminallyStopped();
+            $this->truth->markRecoveryFailedTerminal($reason::class, $this->truth->hasPreparedRecoveryContext());
             $this->connectionState = ConnectionState::Disconnected;
             if ($this->sessionState !== SessionState::Failed) {
                 $this->sessionState = SessionState::Disconnected;
@@ -928,6 +1052,7 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->reconnectPhase = RuntimeReconnectPhase::WaitingToRetry;
         $this->reconnectStopReason = null;
         $this->reconnectTerminalStoppedAtMicros = null;
+        $this->truth->beginReconnect($reason::class);
         if ($this->sessionState !== SessionState::Failed) {
             $this->sessionState = SessionState::Disconnected;
         }
@@ -951,6 +1076,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 ? RuntimeReconnectStopReason::RetryExhausted
                 : RuntimeReconnectStopReason::RetryDisabled;
             $this->markReconnectTerminallyStopped();
+            $this->truth->markRecoveryFailedTerminal($reason::class, $this->truth->hasPreparedRecoveryContext());
             $this->connectionState = ConnectionState::Disconnected;
             $this->notifyLifecycleChange();
             $this->settleConnectFailure($reason);
@@ -995,6 +1121,8 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->heartbeat->start();
         $this->livenessState = $this->heartbeat->state();
         $this->lastSuccessfulConnectAtMicros = microtime(true) * 1_000_000.0;
+        $this->truth->markReconnected($this->connectionGeneration);
+        $this->truth->markIdleRetryPosture($this->config->retryPolicy->enabled);
         $this->notifyLifecycleChange();
     }
 
@@ -1041,6 +1169,11 @@ final class RuntimeClient implements AsyncEslClientInterface
     private function startDrainTimers(): void
     {
         $this->cancelDrainTimers();
+        $this->truth->requestDrain('explicit_disconnect');
+        $this->truth->beginDraining('explicit_disconnect');
+        foreach ($this->truth->activeOperations() as $operation) {
+            $this->truth->markOperationDraining($operation->operationId, $this->connectionGeneration);
+        }
         $this->drainPollTimer = $this->loop->addPeriodicTimer(0.01, function (): void {
             $this->maybeFinalizeDrain();
         });
@@ -1056,6 +1189,7 @@ final class RuntimeClient implements AsyncEslClientInterface
                 $timeoutSeconds,
                 $this->totalInflightWorkCount(),
             ));
+            $this->truth->markDrainTimedOut();
             $this->recordError($reason);
             $this->commands->abortAll($reason);
             $this->bgapi->terminateAll($reason);
@@ -1105,6 +1239,175 @@ final class RuntimeClient implements AsyncEslClientInterface
         if ($this->drainPollTimer !== null) {
             $this->loop->cancelTimer($this->drainPollTimer);
             $this->drainPollTimer = null;
+        }
+    }
+
+    public function recordBgapiAck(InFlightOperationId $operationId, string $jobUuid): void
+    {
+        $this->truth->assignBgapiJobUuid($operationId, $jobUuid, $this->connectionGeneration);
+    }
+
+    public function recordBgapiCompletion(InFlightOperationId $operationId, ?string $subjectId): void
+    {
+        $this->truth->settleOperation(
+            operationId: $operationId,
+            source: PublicationSource::ProtocolEvent,
+            cause: TerminalCause::Completed,
+            finality: FinalityMarker::Final,
+            connectionGeneration: $this->connectionGeneration,
+            subjectId: $subjectId,
+        );
+    }
+
+    public function recordBgapiSettlement(InFlightOperationId $operationId, Throwable $reason): void
+    {
+        $cause = TerminalCause::Failed;
+        $finality = FinalityMarker::ProvisionalFinal;
+
+        if ($reason instanceof DrainException) {
+            $cause = TerminalCause::Cancelled;
+        } elseif ($reason instanceof CommandTimeoutException) {
+            $cause = TerminalCause::TimedOut;
+            $finality = FinalityMarker::Ambiguous;
+        } elseif ($reason instanceof ConnectionLostException) {
+            $cause = TerminalCause::Disconnected;
+            $finality = FinalityMarker::Ambiguous;
+        }
+
+        $this->truth->settleOperation(
+            operationId: $operationId,
+            source: PublicationSource::CommandReply,
+            cause: $cause,
+            finality: $finality,
+            connectionGeneration: $this->connectionGeneration,
+        );
+    }
+
+    private function settleApiOperation(InFlightOperationId $operationId, ?Throwable $error): void
+    {
+        if ($this->activeApiOperationId !== null && $this->activeApiOperationId->equals($operationId)) {
+            $this->activeApiOperationId = null;
+        } else {
+            foreach ($this->apiOperationQueue as $index => $queuedId) {
+                if ($queuedId->equals($operationId)) {
+                    unset($this->apiOperationQueue[$index]);
+                    $this->apiOperationQueue = array_values($this->apiOperationQueue);
+                    break;
+                }
+            }
+        }
+
+        $cause = TerminalCause::Completed;
+        $finality = FinalityMarker::Final;
+
+        if ($error instanceof DrainException) {
+            $cause = TerminalCause::Cancelled;
+            $finality = FinalityMarker::ProvisionalFinal;
+        } elseif ($error instanceof CommandTimeoutException) {
+            $cause = TerminalCause::TimedOut;
+            $finality = FinalityMarker::Ambiguous;
+        } elseif ($error instanceof ConnectionLostException) {
+            $cause = TerminalCause::Disconnected;
+            $finality = FinalityMarker::Ambiguous;
+        } elseif ($error !== null) {
+            $cause = TerminalCause::Failed;
+            $finality = FinalityMarker::ProvisionalFinal;
+        }
+
+        $this->truth->settleOperation(
+            operationId: $operationId,
+            source: PublicationSource::CommandReply,
+            cause: $cause,
+            finality: $finality,
+            connectionGeneration: $this->connectionGeneration,
+        );
+
+        if ($this->commands->inflightCount() > 0 && $this->activeApiOperationId === null && $this->apiOperationQueue !== []) {
+            $this->activeApiOperationId = array_shift($this->apiOperationQueue);
+            if ($this->activeApiOperationId instanceof InFlightOperationId) {
+                $this->truth->promoteQueuedOperation($this->activeApiOperationId, $this->connectionGeneration);
+            }
+        }
+    }
+
+    private function recordSemanticEvent(EventInterface $event): void
+    {
+        if (!$event instanceof ProvidesNormalizedSubstrateInterface) {
+            return;
+        }
+
+        $normalized = $event->normalized();
+        $orderingValue = $normalized->eventSequence()
+            ?? sprintf('runtime-%d', (int) (microtime(true) * 1_000_000));
+        $subjectId = $normalized->uniqueId();
+
+        if ($event instanceof BridgeEvent) {
+            $this->truth->recordLifecycleSemantic(
+                transition: LifecycleTransition::Bridge,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+            );
+            return;
+        }
+
+        if ($event instanceof HangupEvent) {
+            $this->truth->recordLifecycleSemantic(
+                transition: LifecycleTransition::Terminal,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+            );
+            $this->truth->recordExternalTerminalPublication(
+                source: PublicationSource::ProtocolEvent,
+                cause: TerminalCause::Hangup,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+            );
+            return;
+        }
+
+        $eventName = $event->eventName();
+        if ($eventName === 'CHANNEL_TRANSFER') {
+            $this->truth->recordLifecycleSemantic(
+                transition: LifecycleTransition::Transfer,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+            );
+            return;
+        }
+
+        if ($eventName === 'CHANNEL_HOLD') {
+            $this->truth->recordLifecycleSemantic(
+                transition: LifecycleTransition::Hold,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+            );
+            return;
+        }
+
+        if ($eventName === 'CHANNEL_UNHOLD' || $eventName === 'CHANNEL_RESUME') {
+            $this->truth->recordLifecycleSemantic(
+                transition: LifecycleTransition::Resume,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+            );
+            return;
+        }
+
+        if ($eventName === 'CHANNEL_DESTROY') {
+            $this->truth->recordLifecycleSemantic(
+                transition: LifecycleTransition::Terminal,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+                state: LifecycleSemanticState::Provisional,
+                variance: BoundedVarianceMarker::Provisional,
+            );
+            $this->truth->recordExternalTerminalPublication(
+                source: PublicationSource::ProtocolEvent,
+                cause: TerminalCause::Completed,
+                orderingValue: $orderingValue,
+                subjectId: $subjectId,
+                finality: FinalityMarker::ProvisionalFinal,
+            );
         }
     }
 

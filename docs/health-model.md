@@ -18,6 +18,15 @@ read model.
 For downstream runtime-status export, `RuntimeRunnerHandle::statusSnapshot()`
 packages that same health truth with a coarse status phase, reconnect posture,
 and exact runtime-recorded connect/disconnect/failure timestamps.
+That same runner feedback/status seam now also exposes bounded recovery truth,
+active accepted-work identity, recent terminal-publication facts, and recent
+lifecycle-semantic observations.
+Opt-in live runner harnesses now validate the subset of those additive surfaces
+that can be proven safely against a real FreeSWITCH target: startup/drain
+recovery truth, reconnect generation/retry truth, one real accepted `bgapi`
+operation, bounded recent terminal-publication export after real completion,
+and lifecycle-semantic export only when a lab can safely emit one supported
+semantic event.
 That feedback surface also adds exact desired subscription/filter state and
 exact retry-scheduling truth that are specific to the package-owned runner
 integration seam.
@@ -193,6 +202,15 @@ truth:
   reflects the scheduled target rather than a hard real-time execution receipt
 - `terminalStoppedDurationSeconds` is a derived local elapsed duration since
   terminal stop and may drift slightly with wall-clock/event-loop timing
+
+For runner-facing integrations that also need bounded reconstruction/recovery
+truth, `RuntimeRunnerHandle::feedbackSnapshot()->recovery` packages:
+
+- current recovery generation identity
+- retry/drain/reconstruction/replay-continuity posture
+- prepared-context application state
+- recoverable-after-reconnect vs recoverable-only-with-prepared-context vs terminal-non-recoverable status
+- last bounded recovery and drain causes/outcomes known to the runtime
 
 ---
 

@@ -22,6 +22,7 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface`
 - `Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface`
 - `Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface`
+- `Apntalk\EslReact\Contracts\PreparedRuntimeRecoveryInputInterface`
 - `Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface`
 - `Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface`
 - `Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface`
@@ -48,10 +49,15 @@ The following types are considered stable for pre-1.0:
 - `Apntalk\EslReact\Bgapi\BgapiJobHandle`
 - `Apntalk\EslReact\Runner\PreparedRuntimeInput`
 - `Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput`
+- `Apntalk\EslReact\Runner\PreparedRuntimeRecoveryContext`
 - `Apntalk\EslReact\Runner\RuntimeRunnerHandle`
 - `Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeStatusSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeRecoverySnapshot`
+- `Apntalk\EslReact\Runner\RuntimeOperationSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeTerminalPublicationSnapshot`
+- `Apntalk\EslReact\Runner\RuntimeLifecycleSemanticSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot`
 - `Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot`
@@ -87,6 +93,7 @@ The following behaviors are considered stable even when the implementing types a
 - `RuntimeRunnerHandle::onLifecycleChange()` immediate current-snapshot delivery and synchronous ordered callback semantics
 - `RuntimeRunnerHandle::feedbackSnapshot()` as a stable packaging of existing health truth plus prepared runtime identity
 - `RuntimeRunnerHandle::statusSnapshot()` as a stable export packaging of runtime-owned lifecycle/reconnect truth plus recent connect/disconnect/failure observations
+- `RuntimeRunnerHandle::feedbackSnapshot()->recovery`, `activeOperations`, `recentTerminalPublications`, and `recentLifecycleSemantics` as stable bounded runtime-truth packaging for downstream export/persistence
 - `RuntimeFeedbackSnapshot::subscriptionState()` as exact desired subscription/filter state for the current runtime instance
 - `RuntimeFeedbackSnapshot::observedSubscriptionState()` as conservative locally observed-applied subscription/filter state for the current authenticated session, with explicit invalidation and rebuild semantics across reconnect
 - `RuntimeFeedbackSnapshot::reconnectState()` as stable reconnect/backoff detail packaging exact runtime/scheduler truth plus approximate local due/remaining timing

@@ -100,6 +100,22 @@ final class LiveRuntimeRunnerReconnectCompatibilityTest extends AsyncTestCase
         self::assertFalse($live->isDraining());
         self::assertSame([$eventName], $handle->client()->subscriptions()->activeEventNames());
 
+        $initialFeedback = $handle->feedbackSnapshot();
+        self::assertSame('retryable', $initialFeedback->recovery->retryPosture->value);
+        self::assertSame('not-draining', $initialFeedback->recovery->drainPosture->value);
+        self::assertSame('native', $initialFeedback->recovery->reconstructionPosture->value);
+        self::assertSame('continuous', $initialFeedback->recovery->replayContinuity->value);
+        self::assertSame('1', $initialFeedback->recovery->generationId->toString());
+        self::assertFalse($initialFeedback->recovery->isRecoverableAfterReconnect);
+        self::assertNull($initialFeedback->recovery->lastRecoveryCause);
+        self::assertNull($initialFeedback->recovery->lastRecoveryOutcome);
+        self::assertSame([], $initialFeedback->activeOperations);
+
+        $initialStatus = $handle->statusSnapshot();
+        self::assertSame('active', $initialStatus->phase->value);
+        self::assertFalse($initialStatus->isRecoveryInProgress);
+        self::assertSame('continuous', $initialStatus->recovery->replayContinuity->value);
+
         $disrupted = false;
         $restored = false;
 
@@ -127,6 +143,22 @@ final class LiveRuntimeRunnerReconnectCompatibilityTest extends AsyncTestCase
             self::assertFalse($reconnecting->isDraining());
             self::assertFalse($reconnecting->isStopped());
             self::assertContains($reconnecting->connectionState(), [ConnectionState::Reconnecting, ConnectionState::Disconnected]);
+
+            $reconnectingFeedback = $handle->feedbackSnapshot();
+            self::assertSame('retrying', $reconnectingFeedback->recovery->retryPosture->value);
+            self::assertSame('not-draining', $reconnectingFeedback->recovery->drainPosture->value);
+            self::assertSame('hook-required', $reconnectingFeedback->recovery->reconstructionPosture->value);
+            self::assertSame('gap-detected', $reconnectingFeedback->recovery->replayContinuity->value);
+            self::assertTrue($reconnectingFeedback->recovery->isRecoverableAfterReconnect);
+            self::assertNotNull($reconnectingFeedback->recovery->lastRecoveryCause);
+            self::assertSame('reconnecting', $reconnectingFeedback->recovery->lastRecoveryOutcome);
+            self::assertSame([], $reconnectingFeedback->activeOperations);
+
+            $reconnectingStatus = $handle->statusSnapshot();
+            self::assertSame('reconnecting', $reconnectingStatus->phase->value);
+            self::assertTrue($reconnectingStatus->isRecoveryInProgress);
+            self::assertSame('retrying', $reconnectingStatus->recovery->retryPosture->value);
+            self::assertSame('gap-detected', $reconnectingStatus->toArray()['recovery']['replay_continuity']);
 
             self::assertNotEmpty(array_filter(
                 $markers,
@@ -168,6 +200,29 @@ final class LiveRuntimeRunnerReconnectCompatibilityTest extends AsyncTestCase
             self::assertFalse($recovered->isDraining());
             self::assertFalse($recovered->isStopped());
             self::assertSame([$eventName], $handle->client()->subscriptions()->activeEventNames());
+
+            $recoveredFeedback = $handle->feedbackSnapshot();
+            self::assertNotSame(
+                $initialFeedback->recovery->generationId->toString(),
+                $recoveredFeedback->recovery->generationId->toString(),
+            );
+            self::assertSame('retryable', $recoveredFeedback->recovery->retryPosture->value);
+            self::assertSame('not-draining', $recoveredFeedback->recovery->drainPosture->value);
+            self::assertSame('hook-required', $recoveredFeedback->recovery->reconstructionPosture->value);
+            self::assertSame('gap-detected', $recoveredFeedback->recovery->replayContinuity->value);
+            self::assertTrue($recoveredFeedback->recovery->isRecoverableAfterReconnect);
+            self::assertSame('recovered_after_reconnect', $recoveredFeedback->recovery->lastRecoveryOutcome);
+            self::assertGreaterThan(
+                $initialFeedback->recovery->connectionGeneration,
+                $recoveredFeedback->recovery->connectionGeneration,
+            );
+            self::assertSame([], $recoveredFeedback->activeOperations);
+
+            $recoveredStatus = $handle->statusSnapshot();
+            self::assertSame('active', $recoveredStatus->phase->value);
+            self::assertFalse($recoveredStatus->isRecoveryInProgress);
+            self::assertSame('retryable', $recoveredStatus->recovery->retryPosture->value);
+            self::assertSame('gap-detected', $recoveredStatus->toArray()['recovery']['replay_continuity']);
 
             self::assertGreaterThanOrEqual(2, count(array_filter(
                 $markers,

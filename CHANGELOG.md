@@ -7,18 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 - Release prep note for the next patch:
-  [docs/release-prep-v0.2.12.md](docs/release-prep-v0.2.12.md)
+  [docs/release-prep-v0.2.13.md](docs/release-prep-v0.2.13.md)
 - Continuity note: this file does not currently preserve changelog entries for `0.2.8` through `0.2.10`; surviving release-prep context for that range starts at [docs/release-prep-v0.2.10.md](docs/release-prep-v0.2.10.md).
 
 ### Changed
+- Runner feedback/status now package bounded queue/retry/drain/recovery truth using `apntalk/esl-core` vocabulary, including recovery generation identity, reconstruction posture, replay continuity posture, recent terminal-publication facts, and recent lifecycle-semantic observations for downstream export
+- Prepared runner bootstrap now accepts bounded prepared recovery context so higher layers can hand off recovery-generation and reconstruction truth without moving storage or replay execution into `esl-react`
+- Recovery truth now fails closed more explicitly: reconnect can still succeed while replay continuity remains `gap-detected`, and terminal fail-closed states distinguish between "recoverable only with prepared context" and "terminally non-recoverable"
+- Startup recovery truth is now honest on first authenticated connect: initial startup no longer reports reconnect-recoverable status or a recovered-after-reconnect outcome before any actual reconnect path has begun
+- Replay artifacts keep the existing artifact names/version while adding additive runtime recovery metadata only; rejected work still emits no dispatch artifact
 - Runtime ingress now consumes supported public `apntalk/esl-core` inbound-pipeline seams instead of relying on unsupported internal classification wiring, while keeping the existing runtime connect/auth and replay-facing behavior intact
 - Prepared bootstrap inbound pipelines now participate in the live runtime ingress path for startup and reconnect attempts instead of being accepted and discarded after handoff
 - Reconnect restore now fails closed when a restore command receives server `-ERR`: the runtime does not mark the session live, closes the just-authenticated connection, and continues supervised recovery according to retry policy
 - Live subscription and filter mutations now reject truthfully on server `-ERR`, preserve desired and observed local state correctly, and do not misclassify those failures as auth or reconnect failures
 - Release-facing docs and contract wording now match the implemented runtime truth for prepared ingress, reconnect restore failure handling, live mutation rejection behavior, `bgapi()` pre-auth/recovery rejection, health reporter methods, and health/status timestamp semantics
+- Release-facing docs, examples, and live env templates now match the verified opt-in runner proofs: startup lifecycle truth is live-proven, the runner bgapi/event proof is live-proven, and the runner bgapi/event harness defaults to a short safe `msleep` window so accepted-work tracking can be observed before completion
 - Repo-native formatting and release-validation gates are now normalized and passing again, including `composer cs-check` and the aggregate `composer check`
 
 ### Added
+- Stable public read models for prepared recovery context, recovery snapshot, active operation truth, terminal-publication truth, and lifecycle-semantic observations on the runner seam
+- Deterministic fake-server integration coverage for prepared recovery bootstrap truth, active-operation drain tracking, terminal-publication markers, and lifecycle-semantic observation export on the runner seam
 - Deterministic fake-server regression coverage for reconnect restore failure on server `-ERR`, proving the runtime does not report a false healthy/authenticated steady state when restore fails
 - Deterministic fake-server regression coverage for live subscription and filter mutation `-ERR` across `subscribe()`, `unsubscribe()`, `addFilter()`, and `removeFilter()`
 

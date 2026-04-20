@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
 
+use Apntalk\EslCore\Vocabulary\DrainPosture;
+use Apntalk\EslCore\Vocabulary\ReconstructionPosture;
+use Apntalk\EslCore\Vocabulary\RecoveryGenerationId;
+use Apntalk\EslCore\Vocabulary\ReplayContinuity;
+use Apntalk\EslCore\Vocabulary\RetryPosture;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
@@ -111,6 +116,17 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
             isCurrentForActiveSession: false,
         );
         $reconnectState = new RuntimeReconnectStateSnapshot();
+        $recovery = new RuntimeRecoverySnapshot(
+            generationId: RecoveryGenerationId::fromInteger(1),
+            connectionGeneration: 0,
+            retryPosture: RetryPosture::Unknown,
+            drainPosture: DrainPosture::Unknown,
+            reconstructionPosture: ReconstructionPosture::Provisional,
+            replayContinuity: ReplayContinuity::Unknown,
+        );
+        $activeOperations = [];
+        $recentTerminalPublications = [];
+        $recentLifecycleSemantics = [];
         $activeApiCommandCount = 0;
         $queuedApiCommandCount = 0;
         $isReconnectRetryScheduled = false;
@@ -153,6 +169,10 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
             $activeApiCommandCount = $this->client->activeApiCommandCount();
             $queuedApiCommandCount = $this->client->queuedApiCommandCount();
             $isReconnectRetryScheduled = $this->client->isReconnectRetryScheduled();
+            $recovery = $this->client->recoverySnapshot();
+            $activeOperations = $this->client->activeOperations();
+            $recentTerminalPublications = $this->client->recentTerminalPublications();
+            $recentLifecycleSemantics = $this->client->recentLifecycleSemantics();
         }
 
         return new RuntimeFeedbackSnapshot(
@@ -162,6 +182,10 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
             subscriptionState: $subscriptionState,
             observedSubscriptionState: $observedSubscriptionState,
             reconnectState: $reconnectState,
+            recovery: $recovery,
+            activeOperations: $activeOperations,
+            recentTerminalPublications: $recentTerminalPublications,
+            recentLifecycleSemantics: $recentLifecycleSemantics,
             activeApiCommandCount: $activeApiCommandCount,
             queuedApiCommandCount: $queuedApiCommandCount,
             isReconnectRetryScheduled: $isReconnectRetryScheduled,
@@ -190,6 +214,10 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
             phase: $this->statusPhase($feedback),
             health: $feedback->health,
             reconnectState: $feedback->reconnectState,
+            recovery: $feedback->recovery,
+            activeOperations: $feedback->activeOperations,
+            recentTerminalPublications: $feedback->recentTerminalPublications,
+            recentLifecycleSemantics: $feedback->recentLifecycleSemantics,
             isRuntimeActive: $this->isRuntimeActive($feedback),
             isRecoveryInProgress: $this->isRecoveryInProgress($feedback),
             lastSuccessfulConnectAtMicros: $statusObservation['last_successful_connect_at_micros'],

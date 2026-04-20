@@ -9,6 +9,7 @@ Current implementation status:
 - Implemented and test-covered: runtime construction, connect/auth lifecycle, inbound frame pump, serial `api()` dispatch, live typed event streaming, raw event-envelope delivery, unknown-event handling, live-session subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, tracked `bgapi()`, explicit backpressure rejection, bounded drain shutdown, health snapshots, and deterministic fake-server integration tests.
 - Implemented and contract-stabilized: replay-safe runtime hook emission for supported runtime paths.
 - Implemented and test-covered in the current runner milestones: a narrow prepared-input runner seam plus a richer prepared-bootstrap input path that can carry prepared ReactPHP transport access, prepared ingress pipeline access, and runtime-local session context.
+- Implemented and test-covered for truthful runtime substrate export: runner feedback/status now also surface queue posture, accepted-work identity, recovery generation identity, reconstruction posture, replay continuity posture, recent terminal-publication facts, and recent lifecycle-semantic observations using `apntalk/esl-core` vocabulary.
 - Implemented and test-covered for higher-layer observation: runner lifecycle snapshots, exportable runner status snapshots, and push-based lifecycle callbacks that expose startup state, connection/session health, liveness, reconnecting, drain, and failure truth without giving downstream packages runtime ownership. Recent runtime-owned connect/disconnect/failure timestamps and bounded cause summaries live on the status snapshot surface, not on the coarse lifecycle callback.
 - The runner observation contract is intentionally split: `lifecycleSnapshot()` / `onLifecycleChange()` stay coarse and stable for lifecycle observation, while `feedbackSnapshot()` and `statusSnapshot()` carry the richer reconnect/backoff timing, terminal-stop, and disconnect/failure-cause detail.
 - Present but still minimal relative to the plan: heartbeat orchestration beyond the current liveness probe and recover-on-silence behavior.
@@ -18,7 +19,7 @@ Current implementation status:
 - `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
 Release note and tag-prep summary for the next patch release:
-[docs/release-prep-v0.2.12.md](docs/release-prep-v0.2.12.md)
+[docs/release-prep-v0.2.13.md](docs/release-prep-v0.2.13.md)
 
 ---
 
@@ -140,6 +141,7 @@ Current runner truth:
 - `PreparedRuntimeBootstrapInput` supports a richer handoff with a prepared ReactPHP `ConnectorInterface`, prepared `InboundPipelineInterface`, and runtime-local `RuntimeSessionContext`.
 - `PreparedRuntimeBootstrapInput` can also carry an explicit prepared dial target URI, so higher layers may reuse the prepared connector path for non-default schemes such as `tls://...` without moving runtime ownership out of `esl-react`.
 - `PreparedRuntimeBootstrapInput` can also inject replay capture explicitly for the prepared runner handoff, reusing the stable `ReplayCaptureSinkInterface` contract from `apntalk/esl-core`.
+- `PreparedRuntimeBootstrapInput` can also carry bounded prepared recovery truth through `PreparedRuntimeRecoveryContext`, allowing higher layers to hand off recovery-generation identity and reconstruction posture without making `esl-react` own storage or replay execution.
 - The prepared connector is used for live startup and reconnect attempts. This lets higher layers prepare transport access without making `esl-react` own their control plane.
 - The prepared pipeline is accepted, reset at handoff, and then reused as the live inbound decode path for startup and reconnect attempts on that runtime instance.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and full replacement of the live ingress router with `InboundPipelineInterface` remain deferred.
@@ -156,8 +158,12 @@ Richer prepared-bootstrap example:
 ```php
 use Apntalk\EslCore\Inbound\InboundPipeline;
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
+use Apntalk\EslCore\Vocabulary\ReconstructionPosture;
+use Apntalk\EslCore\Vocabulary\RecoveryGenerationId;
+use Apntalk\EslCore\Vocabulary\ReplayContinuity;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
+use Apntalk\EslReact\Runner\PreparedRuntimeRecoveryContext;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use React\Socket\Connector;
 
@@ -172,6 +178,12 @@ $input = new PreparedRuntimeBootstrapInput(
         workerSessionId: 'worker-session-123',
         connectionProfile: 'primary-pbx',
     ),
+    recoveryContext: new PreparedRuntimeRecoveryContext(
+        generationId: RecoveryGenerationId::fromString('prepared-generation-7'),
+        reconstructionPosture: ReconstructionPosture::HookRequired,
+        replayContinuity: ReplayContinuity::Reconstructed,
+        metadata: ['source' => 'fixture-bootstrap'],
+    ),
     dialUri: 'tls://pbx.example.test:7443',
     replayCaptureSinksOverride: [
         new class () implements ReplayCaptureSinkInterface {
@@ -185,6 +197,9 @@ $input = new PreparedRuntimeBootstrapInput(
 
 $handle = AsyncEslRuntime::runner()->run($input, $loop);
 $feedback = $handle->feedbackSnapshot();
+$recovery = $feedback->recovery;
+$operations = $feedback->activeOperations;
+$publications = $feedback->recentTerminalPublications;
 ```
 
 ### Runner feedback quick reference
@@ -214,6 +229,9 @@ Safe consumption rules:
 - treat `reconnectState()->terminalStoppedDurationSeconds` as derived local elapsed time, not a persisted transition timestamp
 - treat `reconnectState()->terminalStopReason` as a bounded runtime-known or policy-derived category, not a general transport diagnostics framework
 - when `subscribeAll` is active, prefer `subscriptionState()->subscribeAll` or `observedSubscriptionState()->subscribeAll` over `activeSubscriptions()`, because the event-name list intentionally stays empty in that mode
+- treat `recovery->generationId`, `reconstructionPosture`, and `replayContinuity` as bounded runtime-owned truth only; they do not claim durable process-restart recovery unless an upper layer supplied explicit prepared context
+- treat `activeOperations` as exact accepted-work identity for the current runtime instance only
+- treat `recentTerminalPublications` and `recentLifecycleSemantics` as bounded recent history for downstream export or persistence, not as a durable replay corpus
 
 ### Runner status quick reference
 
@@ -551,7 +569,12 @@ ESL_REACT_LIVE_PASSWORD=ClueCon \
 vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerLifecycleCompatibilityTest.php
 ```
 
-It verifies the config-driven runner seam, immediate lifecycle observation registration, authenticated live startup, and explicit drain-to-closed shutdown on a real FreeSWITCH target.
+It verifies the config-driven runner seam, immediate lifecycle observation
+registration, authenticated live startup, explicit drain-to-closed shutdown on
+a real FreeSWITCH target, and the additive runner feedback/status recovery
+surfaces that are truthful on that path: generation identity, idle retry
+posture, drain posture/outcome, and the absence of spurious lifecycle-semantic
+or terminal-publication history when no runtime-owned work has occurred.
 
 For labs that can safely automate transport disruption and restoration, an additional opt-in live runner reconnect harness is available:
 
@@ -566,7 +589,16 @@ ESL_REACT_LIVE_RECONNECT_RESTORE_COMMAND='./scripts/restore-esl-path.sh' \
 vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerReconnectCompatibilityTest.php
 ```
 
-This harness runs the public runner seam, subscribes through the public API, executes the configured disrupt/restore commands, and asserts that snapshot plus push-based lifecycle observation surfaces report unexpected transport loss as reconnecting rather than draining before later recovery to authenticated/live truth. This reconnect path has been exercised successfully against a real FreeSWITCH target in an opt-in lab environment. It remains intentionally opt-in and requires target-specific commands that are safe, bounded, and idempotent in your lab environment.
+This harness runs the public runner seam, subscribes through the public API,
+executes the configured disrupt/restore commands, and asserts that snapshot
+plus push-based lifecycle observation surfaces report unexpected transport loss
+as reconnecting rather than draining before later recovery to authenticated/live
+truth. It also validates additive runner recovery truth on that live path:
+retry posture progression, generation rollover, gap-detected replay continuity,
+and bounded reconnect outcome metadata. This reconnect path has been exercised
+successfully against a real FreeSWITCH target in an opt-in lab environment. It
+remains intentionally opt-in and requires target-specific commands that are
+safe, bounded, and idempotent in your lab environment.
 
 An additional opt-in live runner bgapi/event harness is available when a safe
 event source and one low-risk background job command are available:
@@ -578,7 +610,8 @@ ESL_REACT_LIVE_HOST=127.0.0.1 \
 ESL_REACT_LIVE_PORT=8021 \
 ESL_REACT_LIVE_PASSWORD=ClueCon \
 ESL_REACT_LIVE_RUNNER_BGAPI_EVENT_NAME=HEARTBEAT \
-ESL_REACT_LIVE_RUNNER_BGAPI_COMMAND=status \
+ESL_REACT_LIVE_RUNNER_BGAPI_COMMAND=msleep \
+ESL_REACT_LIVE_RUNNER_BGAPI_ARGS=1000 \
 vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerBgapiEventCompatibilityTest.php
 ```
 
@@ -587,8 +620,13 @@ event and `BACKGROUND_JOB`, observes one live event through the public raw
 event stream, runs one safe `bgapi()` command, waits for its real ack and
 completion, and asserts that snapshot plus push-based lifecycle observation
 remain `Authenticated`/`Active`/live without false reconnect, drain, closed, or
-failed markers during the activity. It has been exercised successfully against
-a real FreeSWITCH target in an opt-in lab environment.
+failed markers during the activity. It also validates additive accepted-work
+tracking and terminal-publication export for a real bgapi operation: one active
+operation while the job is pending, then a bounded recent terminal publication
+after completion. It has been exercised successfully against a real FreeSWITCH
+target in an opt-in lab environment. The default command for this harness is a
+short `msleep` window rather than `status`, because the accepted-work proof
+needs a real pending interval that can be observed before completion.
 
 An opt-in live runner reconnect + bgapi/event harness is available for labs
 that can safely automate transport disruption/restoration while also expecting
@@ -650,6 +688,29 @@ custom external disrupt command or a separate ESL-control fault command such as
 `reload mod_event_socket`. The still-deferred gap after this milestone is any
 broader external live fault injection beyond this one pending-job reconnect
 path.
+
+An additional opt-in live runner lifecycle-semantic harness is available for
+labs that can safely generate one supported channel lifecycle event:
+
+```bash
+ESL_REACT_LIVE_TEST=1 \
+ESL_REACT_LIVE_RUNNER_SEMANTIC_TEST=1 \
+ESL_REACT_LIVE_HOST=127.0.0.1 \
+ESL_REACT_LIVE_PORT=8021 \
+ESL_REACT_LIVE_PASSWORD=ClueCon \
+ESL_REACT_LIVE_RUNNER_SEMANTIC_EVENT_NAME=CHANNEL_HANGUP_COMPLETE \
+vendor/bin/phpunit --no-coverage tests/Integration/LiveRuntimeRunnerLifecycleSemanticCompatibilityTest.php
+```
+
+This harness is intentionally narrower than the generic event harness. It only
+accepts semantic transitions the runtime can truthfully infer today:
+`CHANNEL_BRIDGE`, `CHANNEL_TRANSFER`, `CHANNEL_HOLD`, `CHANNEL_UNHOLD`,
+`CHANNEL_RESUME`, `CHANNEL_HANGUP_COMPLETE`, or `CHANNEL_DESTROY`. When the lab
+can safely emit one of those events, the harness validates the exported recent
+lifecycle-semantic history and, for terminal events, the corresponding bounded
+recent terminal-publication history. It does not attempt to manufacture channel
+activity or claim broader semantic certainty when the environment cannot safely
+produce one of those events.
 
 An additional opt-in live event receipt harness is available when a safe event source is expected:
 

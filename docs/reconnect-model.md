@@ -4,7 +4,7 @@
 
 Reconnect is supervised by internal runtime components. When a live connection drops unexpectedly, or when a supervised TCP connect attempt fails, the runtime schedules retry attempts according to `RetryPolicy`.
 
-Consumers configure retry behavior through `RetryPolicy` in `RuntimeConfig`. Consumers observe its effects through `ConnectionState`, `HealthSnapshot::$reconnectAttempts`, `RuntimeRunnerHandle::feedbackSnapshot()->reconnectState()`, and the eventual resolution or rejection of the `connect()` promise.
+Consumers configure retry behavior through `RetryPolicy` in `RuntimeConfig`. Consumers observe its effects through `ConnectionState`, `HealthSnapshot::$reconnectAttempts`, `RuntimeRunnerHandle::feedbackSnapshot()->reconnectState()`, `RuntimeRunnerHandle::feedbackSnapshot()->recovery`, and the eventual resolution or rejection of the `connect()` promise.
 
 ---
 
@@ -95,6 +95,14 @@ Runner-facing reconnect detail semantics:
 - `reconnectState()->lastScheduledRetryDueAtMicros` and `lastScheduledBackoffDelaySeconds` are the exact last retained scheduler values for retry timing context
 - `reconnectState()->lastScheduledRetryDueAtMicros` remains retained scheduler context even after a later explicit shutdown; it should be read as historical local retry context, not as proof that a timer is still pending
 - `reconnectState()->terminalStoppedDurationSeconds` is a derived local elapsed duration since terminal stop and may drift slightly with wall-clock/event-loop timing
+
+Additional recovery-truth semantics:
+
+- `recovery->generationId` is the current runtime-owned recovery generation identity
+- `recovery->retryPosture`, `drainPosture`, `reconstructionPosture`, and `replayContinuity` reuse `apntalk/esl-core` vocabulary instead of repo-local parallel enums
+- reconnect recovery may succeed while replay continuity still remains `gap-detected`; `esl-react` does not claim process-restart continuity without explicit prepared context
+- fail-closed terminal states now distinguish `isRecoverableOnlyWithPreparedContext` from `isTerminallyNonRecoverable`
+- prepared runner bootstrap may inject `PreparedRuntimeRecoveryContext` to label recovery-generation and reconstruction truth, but that remains descriptive only and does not add replay execution or persistence
 
 ---
 

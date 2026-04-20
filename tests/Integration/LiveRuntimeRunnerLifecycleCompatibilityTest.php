@@ -94,6 +94,37 @@ final class LiveRuntimeRunnerLifecycleCompatibilityTest extends AsyncTestCase
         self::assertFalse($live->isStopped());
         self::assertFalse($live->isFailed());
 
+        $liveFeedback = $handle->feedbackSnapshot();
+        self::assertSame('not-queued', $liveFeedback->queueState()->value);
+        self::assertSame('not-retryable', $liveFeedback->recovery->retryPosture->value);
+        self::assertSame('not-draining', $liveFeedback->recovery->drainPosture->value);
+        self::assertSame('native', $liveFeedback->recovery->reconstructionPosture->value);
+        self::assertSame('continuous', $liveFeedback->recovery->replayContinuity->value);
+        self::assertSame('1', $liveFeedback->recovery->generationId->toString());
+        self::assertGreaterThanOrEqual(1, $liveFeedback->recovery->connectionGeneration);
+        self::assertFalse($liveFeedback->recovery->preparedContextApplied);
+        self::assertFalse($liveFeedback->recovery->isRecoverableAfterReconnect);
+        self::assertFalse($liveFeedback->recovery->isRecoverableOnlyWithPreparedContext);
+        self::assertFalse($liveFeedback->recovery->isTerminallyNonRecoverable);
+        self::assertNull($liveFeedback->recovery->lastRecoveryCause);
+        self::assertNull($liveFeedback->recovery->lastRecoveryOutcome);
+        self::assertNull($liveFeedback->recovery->lastDrainCause);
+        self::assertNull($liveFeedback->recovery->lastDrainOutcome);
+        self::assertNotNull($liveFeedback->recovery->generationStartedAtMicros);
+        self::assertSame([], $liveFeedback->activeOperations);
+        self::assertSame([], $liveFeedback->recentTerminalPublications);
+        self::assertSame([], $liveFeedback->recentLifecycleSemantics);
+
+        $liveStatus = $handle->statusSnapshot();
+        self::assertSame('active', $liveStatus->phase->value);
+        self::assertTrue($liveStatus->isRuntimeActive);
+        self::assertFalse($liveStatus->isRecoveryInProgress);
+        self::assertSame('not-retryable', $liveStatus->recovery->retryPosture->value);
+        self::assertSame([], $liveStatus->activeOperations);
+        self::assertSame([], $liveStatus->recentTerminalPublications);
+        self::assertSame([], $liveStatus->recentLifecycleSemantics);
+        self::assertSame('not-retryable', $liveStatus->toArray()['recovery']['retry_posture']);
+
         self::assertNotEmpty(array_filter(
             $markers,
             static fn(array $marker): bool => $marker['runner'] === 'running'
@@ -120,6 +151,23 @@ final class LiveRuntimeRunnerLifecycleCompatibilityTest extends AsyncTestCase
         self::assertFalse($closed->isDraining());
         self::assertTrue($closed->isStopped());
         self::assertFalse($closed->isFailed());
+
+        $closedFeedback = $handle->feedbackSnapshot();
+        self::assertSame('drained', $closedFeedback->recovery->drainPosture->value);
+        self::assertSame('explicit_disconnect', $closedFeedback->recovery->lastDrainCause);
+        self::assertSame('completed', $closedFeedback->recovery->lastDrainOutcome);
+        self::assertSame([], $closedFeedback->activeOperations);
+        self::assertSame([], $closedFeedback->recentTerminalPublications);
+        self::assertSame([], $closedFeedback->recentLifecycleSemantics);
+
+        $closedStatus = $handle->statusSnapshot();
+        self::assertSame('closed', $closedStatus->phase->value);
+        self::assertFalse($closedStatus->isRuntimeActive);
+        self::assertFalse($closedStatus->isRecoveryInProgress);
+        self::assertSame('drained', $closedStatus->recovery->drainPosture->value);
+        self::assertSame('explicit_disconnect', $closedStatus->recovery->lastDrainCause);
+        self::assertSame('completed', $closedStatus->recovery->lastDrainOutcome);
+        self::assertSame('drained', $closedStatus->toArray()['recovery']['drain_posture']);
 
         self::assertNotEmpty(array_filter(
             $markers,

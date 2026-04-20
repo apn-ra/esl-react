@@ -70,6 +70,9 @@ Every emitted artifact contains:
 - `runtime-capture-path`
 - runtime connection/session/liveness metadata
 - runtime connection generation
+- runtime recovery generation identity
+- runtime reconstruction posture
+- runtime replay continuity posture
 - runtime reconnect attempt count
 - runtime draining/overloaded flags
 
@@ -165,6 +168,7 @@ Current tested behavior:
 
 - replay capture continues to observe later runtime traffic after an unexpected supervised reconnect
 - reconnect does not reconstruct traffic that was already lost before capture
+- runtime truth surfaces may report `gap-detected`, `ambiguous`, or prepared-context reconstruction posture around reconnect/process-restart boundaries, but replay artifacts themselves remain observational and version-stable
 - overload and drain rejections still fail closed; replay hooks do not bypass those gates
 - accepted inflight work can still produce reply/event/completion capture during drain until it settles or is terminated
 - explicit drain shutdown remains terminal for the runtime instance and does not reconnect

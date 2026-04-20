@@ -5,7 +5,7 @@ This document describes the stable public surface of `apntalk/esl-react`. Consum
 See [docs/stability-policy.md](stability-policy.md) for the full stability policy.
 
 Status note: this pass implements and tests the connect/auth lifecycle, serial `api()` dispatch, tracked `bgapi()` dispatch and completion handling, bounded drain shutdown, live typed event delivery, unknown-event handling, subscription/filter control, reconnect supervision after unexpected disconnect, desired-state restore after re-authentication, explicit overload rejection, health snapshots, runner lifecycle snapshots, runner status snapshots, and a stable replay-hook artifact contract for the currently supported runtime paths. Broader heartbeat orchestration remains intentionally minimal.
-It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals, including explicit prepared-bootstrap replay injection, a stable runner feedback snapshot, and an exportable runner status snapshot for downstream health/reporting adapters.
+It also adds adapter-friendly runner seams for consuming prepared runtime inputs from higher layers without exposing runtime internals, including explicit prepared-bootstrap replay injection, prepared recovery-context injection, a stable runner feedback snapshot, and an exportable runner status snapshot for downstream health/reporting adapters.
 
 ---
 
@@ -160,17 +160,20 @@ Current runner notes:
 - Package-owned live harnesses cover the runner handle startup and explicit drain-to-stop observation path on a real FreeSWITCH target.
 - Package-owned live harnesses now cover unexpected transport-loss reconnect and recovery on the runner seam in opt-in lab environments that provide safe disruption and restore commands.
 - Package-owned deterministic runner tests cover event subscription plus `bgapi()` completion activity while lifecycle snapshots and pushed markers remain authenticated/live, and an opt-in live harness has validated the same runner-surface truth against real FreeSWITCH event and background-job traffic.
+- The same opt-in live runner harness now also validates additive accepted-work tracking and bounded recent terminal-publication export for one real `bgapi()` completion on the runner seam.
 - Package-owned deterministic runner tests cover combined conditions where pending `bgapi()` and desired event subscriptions intersect with degraded liveness or reconnecting runtime states.
 - Package-owned opt-in live runner tests can validate the reconnect + bgapi/event combined path when a lab provides safe transport disrupt/restore commands: pre-fault event delivery, reconnect/no-drain observation, desired subscription restoration, post-reconnect event delivery, and post-reconnect `bgapi()` completion on the same runner handle.
 - Package-owned opt-in live runner tests can also validate the narrower in-flight pending-`bgapi()` reconnect path when a lab can keep one safe bgapi job genuinely pending and trigger reconnect without killing the whole FreeSWITCH process.
 - The default live pending-`bgapi()` harness force-closes the runner transport locally without entering explicit drain, so the runner reconnects while the original `bgapi()` handle remains pending against the still-live FreeSWITCH target.
 - The same harness also supports an external ESL-control fault path such as `api reload mod_event_socket` when a lab wants an out-of-process reconnect trigger.
+- Package-owned opt-in live runner tests can validate lifecycle-semantic export only when a lab can safely emit one supported semantic event; they intentionally do not claim generic semantic certainty on arbitrary live traffic.
 - Package-owned deterministic runner tests now cover heartbeat/liveness degradation and recovery on the same snapshot/push observation surface, and an opt-in live harness can validate the same path on a quiet target.
 - Package-owned deterministic runner tests also cover the second-miss heartbeat dead/reconnect path, and a separate opt-in live harness can validate that deeper path when the lab can make the target go silent without immediately closing the connection.
 - Config-driven `RuntimeRunnerInputInterface` inputs remain supported.
 - Richer `PreparedRuntimeBootstrapInputInterface` inputs can provide prepared ReactPHP transport access, a prepared ingress pipeline, and runtime-local session context.
 - `PreparedRuntimeDialTargetInputInterface` additively allows richer prepared-bootstrap inputs to override the dial target URI used by the prepared connector for startup and reconnect attempts.
 - `PreparedRuntimeReplayCaptureInputInterface` additively allows richer prepared-bootstrap inputs to inject replay capture sinks explicitly on the runner seam while reusing the stable `ReplayCaptureSinkInterface` contract from `apntalk/esl-core`.
+- `PreparedRuntimeRecoveryInputInterface` additively allows richer prepared-bootstrap inputs to inject bounded recovery-generation and reconstruction truth on the runner seam without making `esl-react` own durable persistence or replay execution.
 - Ongoing runtime lifecycle after startup remains on the stable client/health surface rather than a second parallel runner control plane.
 - Direct polling of `apntalk/esl-core` `TransportInterface` is not part of this runner-input expansion.
 
@@ -258,6 +261,14 @@ Current feedback semantics:
 - `isReconnectRetryScheduled()` is exact supervisor truth for whether a retry timer is currently pending after an unexpected disconnect.
 - `reconnectState()` packages additive reconnect/backoff detail for downstream reporting:
   - `phase` is exact runtime-owned reconnect phase truth
+ - `recovery` packages additive recovery/reconstruction truth for downstream reporting:
+  - `generationId` is the current runtime-owned recovery generation identity
+  - `retryPosture`, `drainPosture`, `reconstructionPosture`, and `replayContinuity` reuse `apntalk/esl-core` vocabulary rather than repo-local parallel enums
+  - `preparedContextApplied` is only true when the runner input supplied explicit recovery/reconstruction truth beyond the default native/continuous path
+  - `isRecoverableAfterReconnect`, `isRecoverableOnlyWithPreparedContext`, and `isTerminallyNonRecoverable` are conservative runtime-owned status booleans, not orchestration promises
+  - first authenticated startup does not count as reconnect recovery; `isRecoverableAfterReconnect` and `lastRecoveryOutcome` remain unset until a real reconnect path has begun
+ - `activeOperations` is the exact current accepted-work set for this runtime instance only
+ - `recentTerminalPublications` and `recentLifecycleSemantics` are bounded recent-history export surfaces; they are not durable journals
   - `attemptNumber` is exact for the scheduled or active reconnect attempt when recovery is underway
   - `isRetryScheduled` is exact local scheduler truth
   - `backoffDelaySeconds` is exact for the currently scheduled or active reconnect attempt

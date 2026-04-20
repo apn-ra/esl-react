@@ -8,6 +8,7 @@ use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeRecoveryInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
@@ -15,16 +16,21 @@ use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
 use Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
+use Apntalk\EslReact\Runner\PreparedRuntimeRecoveryContext;
 use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
+use Apntalk\EslReact\Runner\RuntimeLifecycleSemanticSnapshot;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
 use Apntalk\EslReact\Runner\RuntimeObservedSubscriptionStateSnapshot;
+use Apntalk\EslReact\Runner\RuntimeOperationSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
 use Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
+use Apntalk\EslReact\Runner\RuntimeRecoverySnapshot;
 use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
 use Apntalk\EslReact\Runner\RuntimeStatusPhase;
 use Apntalk\EslReact\Runner\RuntimeStatusSnapshot;
 use Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot;
+use Apntalk\EslReact\Runner\RuntimeTerminalPublicationSnapshot;
 use JsonSerializable;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
@@ -183,5 +189,20 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(is_a(PreparedRuntimeReplayCaptureInputInterface::class, PreparedRuntimeBootstrapInputInterface::class, true));
         self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeReplayCaptureInputInterface::class, true));
+    }
+
+    public function testPreparedRuntimeRecoveryInputIsAdditiveBootstrapContract(): void
+    {
+        self::assertTrue(is_a(PreparedRuntimeRecoveryInputInterface::class, RuntimeRunnerInputInterface::class, true));
+        self::assertTrue(is_a(PreparedRuntimeBootstrapInput::class, PreparedRuntimeRecoveryInputInterface::class, true));
+        self::assertTrue(class_exists(PreparedRuntimeRecoveryContext::class));
+    }
+
+    public function testRecoveryAndRuntimeTruthReadModelsRemainStablePublicSurface(): void
+    {
+        self::assertTrue(class_exists(RuntimeRecoverySnapshot::class));
+        self::assertTrue(class_exists(RuntimeOperationSnapshot::class));
+        self::assertTrue(class_exists(RuntimeTerminalPublicationSnapshot::class));
+        self::assertTrue(class_exists(RuntimeLifecycleSemanticSnapshot::class));
     }
 }

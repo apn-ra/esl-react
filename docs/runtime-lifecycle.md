@@ -11,6 +11,7 @@ Hardening note for the implemented slice:
 - After an unexpected disconnect and successful re-authentication, the runtime restores the in-memory desired subscription baseline first and then restores filters before transitioning back to `Authenticated`/`Active`.
 - If the restore leg itself receives a server `-ERR`, the runtime does not transition to `Authenticated`/`Active`; it closes that session and continues supervised reconnect according to the retry policy.
 - Replay capture, when enabled, survives an unexpected reconnect for later runtime traffic because it stays attached to the surviving runtime instance. It does not persist lost traffic or provide process-restart recovery.
+- Runner feedback/status now also expose runtime-owned generation, queue/retry/drain posture, reconstruction posture, replay continuity posture, recent terminal-publication facts, and recent lifecycle-semantic observations. These are observational export surfaces only.
 
 ## State machines
 
@@ -58,12 +59,19 @@ the final `Closed` state. Unexpected transport-loss reconnect recovery is also
 validated by an opt-in automated lab harness when the environment provides safe
 disruption and restore commands, alongside the existing manual live harnesses
 for staging paths where operator-driven disruption is still preferred.
+Those live runner harnesses now also validate the additive runner recovery
+read-model truth that is safe to prove on those paths: idle vs retrying retry
+posture, generation rollover on reconnect, explicit-disconnect drain outcome,
+and the absence of false drain during unexpected transport loss.
 Event subscription plus `bgapi()` activity is regression-tested
 deterministically on the runner seam, and an opt-in live harness has validated
 the same path with real FreeSWITCH event and `BACKGROUND_JOB` traffic. During
 that activity, lifecycle snapshots and pushed callbacks are expected to remain
 `Authenticated`/`Active`/live and must not report reconnect, drain, closed, or
 failed states unless a real transport or runtime failure occurs.
+That same live harness now also validates one real accepted-work record while a
+bgapi job is pending and one bounded recent terminal publication after the
+completion arrives.
 Combined conditions are covered deterministically on the runner seam: a pending
 `bgapi()` job can remain tracked while heartbeat liveness degrades and recovers,
 and pending `bgapi()` plus desired event subscriptions can survive unexpected
@@ -83,6 +91,11 @@ job count stays non-zero across recovery, and the original handle later
 resolves on `BACKGROUND_JOB` completion after reconnect. The same harness can
 also use an external ESL-control fault such as `reload mod_event_socket` when
 the lab wants a separate reconnect trigger.
+Lifecycle-semantic export remains narrower live: a dedicated opt-in harness can
+prove semantic observations only when the lab can safely emit one supported
+channel event that maps to the current runtime-owned semantic transitions. When
+that safe trigger is unavailable, semantic mapping continues to be proven
+deterministically rather than by weak live assertions.
 Heartbeat/liveness degradation is regression-tested deterministically on the
 runner seam and can also be exercised by an opt-in live harness on relatively
 quiet targets, where the expected path is `Authenticated/live` ->
@@ -112,6 +125,9 @@ Observation note for shutdown and reconnect:
 - Heartbeat failure after the second consecutive missed liveness check also
   enters the reconnect/disconnect path rather than the explicit drain path.
 - These remain distinct on both snapshot reads and pushed lifecycle callbacks.
+- Unexpected transport loss may leave replay continuity in `gap-detected` or
+  `ambiguous` posture until an upper layer reconstructs or persists additional
+  truth. `esl-react` does not fake process-restart continuity.
 
 ---
 

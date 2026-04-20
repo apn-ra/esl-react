@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apntalk\EslReact\Bgapi;
 
+use Apntalk\EslCore\Vocabulary\InFlightOperationId;
 use InvalidArgumentException;
 use React\EventLoop\TimerInterface;
 use React\Promise\Deferred;
@@ -19,12 +20,18 @@ final class PendingBgapiJob
      * @param Deferred<\Apntalk\EslCore\Events\BackgroundJobEvent> $deferred
      */
     public function __construct(
+        private readonly InFlightOperationId $operationId,
         private ?string $jobUuid,
         private readonly string $eslCommand,
         private readonly string $eslArgs,
         private readonly Deferred $deferred,
         private readonly float $dispatchedAtMicros,
     ) {}
+
+    public function operationId(): InFlightOperationId
+    {
+        return $this->operationId;
+    }
 
     public function jobUuid(): ?string
     {

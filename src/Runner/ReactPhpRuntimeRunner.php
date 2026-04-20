@@ -7,6 +7,7 @@ namespace Apntalk\EslReact\Runner;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeRecoveryInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
@@ -30,6 +31,7 @@ final class ReactPhpRuntimeRunner implements RuntimeRunnerInterface
                 connector: $input->connector(),
                 connectionUri: $input instanceof PreparedRuntimeDialTargetInputInterface ? $input->dialUri() : null,
                 sessionContext: $sessionContext,
+                recoveryContext: $input instanceof PreparedRuntimeRecoveryInputInterface ? $input->recoveryContext() : null,
                 replayCaptureEnabled: $input instanceof PreparedRuntimeReplayCaptureInputInterface ? $input->replayCaptureEnabled() : null,
                 replayCaptureSinks: $input instanceof PreparedRuntimeReplayCaptureInputInterface ? $input->replayCaptureSinks() : null,
                 inboundPipeline: $input->inboundPipeline(),

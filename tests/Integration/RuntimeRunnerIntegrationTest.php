@@ -10,6 +10,9 @@ use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslCore\Inbound\DecodedInboundMessage;
 use Apntalk\EslCore\Inbound\InboundPipeline;
 use Apntalk\EslCore\Replies\ApiReply;
+use Apntalk\EslCore\Vocabulary\ReconstructionPosture;
+use Apntalk\EslCore\Vocabulary\RecoveryGenerationId;
+use Apntalk\EslCore\Vocabulary\ReplayContinuity;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Bgapi\BgapiJobHandle;
 use Apntalk\EslReact\Config\CommandTimeoutConfig;
@@ -20,8 +23,10 @@ use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
+use Apntalk\EslReact\Exceptions\DrainException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
+use Apntalk\EslReact\Runner\PreparedRuntimeRecoveryContext;
 use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
@@ -119,6 +124,16 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($lifecycle->startupErrorClass);
         self::assertNull($lifecycle->startupErrorMessage);
 
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame('not-queued', $feedback->queueState()->value);
+        self::assertSame('retryable', $feedback->recovery->retryPosture->value);
+        self::assertSame('not-draining', $feedback->recovery->drainPosture->value);
+        self::assertFalse($feedback->recovery->isRecoverableAfterReconnect);
+        self::assertNull($feedback->recovery->lastRecoveryCause);
+        self::assertNull($feedback->recovery->lastRecoveryOutcome);
+        self::assertSame('continuous', $feedback->recovery->replayContinuity->value);
+        self::assertSame([], $feedback->activeOperations);
+
         $reply = $this->await($handle->client()->api('status'));
 
         self::assertInstanceOf(ApiReply::class, $reply);
@@ -130,6 +145,126 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertTrue($snapshot->isLive);
 
         $server->closeActiveConnection();
+        $server->close();
+    }
+
+    public function testRunnerFeedbackExposesPreparedRecoveryTruthAndLifecycleSemantics(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: sprintf('worker://127.0.0.1:%d/runtime', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                ),
+                connector: new Connector([], $this->loop),
+                inboundPipeline: new InboundPipeline(),
+                sessionContext: new RuntimeSessionContext('runtime-session-1'),
+                recoveryContext: new PreparedRuntimeRecoveryContext(
+                    generationId: RecoveryGenerationId::fromString('prepared-generation-7'),
+                    reconstructionPosture: ReconstructionPosture::HookRequired,
+                    replayContinuity: ReplayContinuity::Reconstructed,
+                    metadata: ['fixture' => 'prepared'],
+                ),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+
+        $server->emitPlainEvent([
+            'Event-Name' => 'CHANNEL_BRIDGE',
+            'Event-Sequence' => '41',
+            'Unique-ID' => 'uuid-bridge',
+            'Other-Leg-Unique-ID' => 'uuid-other',
+        ]);
+        $server->emitPlainEvent([
+            'Event-Name' => 'CHANNEL_HANGUP_COMPLETE',
+            'Event-Sequence' => '42',
+            'Unique-ID' => 'uuid-bridge',
+            'Hangup-Cause' => 'NORMAL_CLEARING',
+        ]);
+        $this->runLoopFor(0.05);
+
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame('prepared-generation-7', $feedback->recovery->generationId->toString());
+        self::assertSame('hook-required', $feedback->recovery->reconstructionPosture->value);
+        self::assertSame('reconstructed', $feedback->recovery->replayContinuity->value);
+        self::assertTrue($feedback->recovery->preparedContextApplied);
+        self::assertNotSame([], $feedback->recentLifecycleSemantics);
+        self::assertSame('bridge', $feedback->recentLifecycleSemantics[0]->observation->transition()->value);
+        self::assertNotSame([], $feedback->recentTerminalPublications);
+        self::assertSame('hangup', $feedback->recentTerminalPublications[0]->publication->terminalCause()->value);
+
+        $server->close();
+    }
+
+    public function testRunnerFeedbackTracksAcceptedOperationDrainAndTerminalPublicationTruth(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(static function ($connection, string $command): void {
+            self::assertSame('api status', $command);
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('exit', $command);
+            $server->writeCommandReply($connection, '+OK bye');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                ),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+        $api = $handle->client()->api('status');
+
+        $this->waitUntil(
+            fn(): bool => $handle->feedbackSnapshot()->activeOperations !== [],
+            0.1,
+        );
+
+        $active = $handle->feedbackSnapshot();
+        self::assertSame('in-flight', $active->activeOperations[0]->queueState->value);
+
+        $disconnect = $handle->client()->disconnect();
+
+        $this->waitUntil(
+            fn(): bool => $handle->feedbackSnapshot()->recovery->drainPosture->value === 'draining',
+            0.1,
+        );
+
+        try {
+            $this->await($api, 0.5);
+            self::fail('Expected api to terminate during drain.');
+        } catch (DrainException) {
+        }
+
+        $this->await($disconnect, 0.5);
+
+        $after = $handle->feedbackSnapshot();
+        self::assertSame('drained', $after->recovery->drainPosture->value);
+        self::assertNotSame([], $after->recentTerminalPublications);
+        self::assertSame('cancelled', $after->recentTerminalPublications[0]->publication->terminalCause()->value);
+        self::assertSame('provisional-final', $after->recentTerminalPublications[0]->publication->finality()->value);
+
         $server->close();
     }
 

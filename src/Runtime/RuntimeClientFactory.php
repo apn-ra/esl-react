@@ -25,6 +25,7 @@ use Apntalk\EslReact\Protocol\FrameWriter;
 use Apntalk\EslReact\Protocol\InboundMessagePump;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
+use Apntalk\EslReact\Runner\PreparedRuntimeRecoveryContext;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
 use Apntalk\EslReact\Subscription\ActiveSubscriptionSet;
 use Apntalk\EslReact\Subscription\FilterManager;
@@ -47,6 +48,7 @@ final class RuntimeClientFactory
         ?ConnectorInterface $connector = null,
         ?string $connectionUri = null,
         ?RuntimeSessionContext $sessionContext = null,
+        ?PreparedRuntimeRecoveryContext $recoveryContext = null,
         ?bool $replayCaptureEnabled = null,
         ?array $replayCaptureSinks = null,
         ?InboundPipelineInterface $inboundPipeline = null,
@@ -58,6 +60,7 @@ final class RuntimeClientFactory
         $eventStream = new EventStream(new EventFactory(), $correlation);
         /** @var list<ReplayCaptureSinkInterface> $resolvedReplayCaptureSinks */
         $resolvedReplayCaptureSinks = $replayCaptureSinks ?? $config->replayCaptureSinks;
+        $truth = new RuntimeTruthRegistry(preparedContext: $recoveryContext);
         $replay = new RuntimeReplayCapture(
             correlation: $correlation,
             sinks: $resolvedReplayCaptureSinks,
@@ -74,6 +77,9 @@ final class RuntimeClientFactory
                     'runtime-liveness-state' => $client->livenessState()->name,
                     'runtime-reconnect-attempts' => (string) $client->reconnectAttempts(),
                     'runtime-connection-generation' => (string) $client->connectionGeneration(),
+                    'runtime-recovery-generation-id' => $client->recoverySnapshot()->generationId->toString(),
+                    'runtime-reconstruction-posture' => $client->recoverySnapshot()->reconstructionPosture->value,
+                    'runtime-replay-continuity' => $client->recoverySnapshot()->replayContinuity->value,
                     'runtime-draining' => $client->isDraining() ? 'true' : 'false',
                     'runtime-overloaded' => $client->isOverloaded() ? 'true' : 'false',
                 ];
@@ -106,6 +112,21 @@ final class RuntimeClientFactory
             },
             ackTimeoutSeconds: $config->commandTimeout->bgapiAckTimeoutSeconds,
             replayCapture: $replay,
+            onAck: static function (\Apntalk\EslReact\Bgapi\PendingBgapiJob $job) use (&$client): void {
+                if ($client instanceof RuntimeClient && $job->jobUuid() !== null) {
+                    $client->recordBgapiAck($job->operationId(), $job->jobUuid());
+                }
+            },
+            onRejected: static function (\Apntalk\EslReact\Bgapi\PendingBgapiJob $job, Throwable $reason) use (&$client): void {
+                if ($client instanceof RuntimeClient) {
+                    $client->recordBgapiSettlement($job->operationId(), $reason);
+                }
+            },
+            onCompleted: static function (\Apntalk\EslReact\Bgapi\PendingBgapiJob $job, \Apntalk\EslCore\Events\BackgroundJobEvent $event) use (&$client): void {
+                if ($client instanceof RuntimeClient) {
+                    $client->recordBgapiCompletion($job->operationId(), $event->uniqueId());
+                }
+            },
         );
 
         $idleTimer = new IdleTimer();
@@ -154,6 +175,7 @@ final class RuntimeClientFactory
             reconnects: new ReconnectScheduler($config->retryPolicy, $loop),
             heartbeat: $heartbeat,
             replay: $replay,
+            truth: $truth,
         );
 
         $health = new RuntimeHealthReporter(
