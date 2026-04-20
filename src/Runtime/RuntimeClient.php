@@ -462,6 +462,20 @@ final class RuntimeClient implements AsyncEslClientInterface
         $this->assertCanAcceptNewWork();
     }
 
+    public function handleApiReplyTimeoutAmbiguity(\Throwable $reason): void
+    {
+        if ($this->connection === null) {
+            return;
+        }
+
+        $this->pendingCloseReason = new ConnectionLostException(
+            'Connection closed after api timeout to avoid late-reply mis-correlation',
+            0,
+            $reason,
+        );
+        $this->connection->close();
+    }
+
     private function wireProtocol(): void
     {
         $this->router->onAuthRequest(function (): void {

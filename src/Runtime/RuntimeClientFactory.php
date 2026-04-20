@@ -87,6 +87,13 @@ final class RuntimeClientFactory
             },
             loop: $loop,
             maxQueued: $config->backpressure->maxInflightCommands,
+            onReplyCorrelationCompromised: static function (\Throwable $reason) use (&$client): void {
+                if (!$client instanceof RuntimeClient) {
+                    return;
+                }
+
+                $client->handleApiReplyTimeoutAmbiguity($reason);
+            },
         );
         $bgapiTracker = new BgapiJobTracker($loop, $config->commandTimeout->bgapiOrphanTimeoutSeconds);
         $bgapi = new BgapiDispatcher(

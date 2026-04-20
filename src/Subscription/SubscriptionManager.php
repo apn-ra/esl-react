@@ -10,6 +10,7 @@ use Apntalk\EslReact\Contracts\SubscriptionManagerInterface;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
 use React\Promise\PromiseInterface;
+use function React\Promise\reject;
 use function React\Promise\resolve;
 
 final class SubscriptionManager implements SubscriptionManagerInterface
@@ -43,7 +44,9 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             return $this->resolvedVoid();
         }
 
-        $this->assertCanMutateLiveSession();
+        if (($rejection = $this->rejectIfCannotMutateLiveSession()) !== null) {
+            return $rejection;
+        }
 
         if ($this->activeSubscriptions->isSubscribedAll()) {
             return $this->resolvedVoid();
@@ -86,7 +89,9 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
     public function subscribeAll(): PromiseInterface
     {
-        $this->assertCanMutateLiveSession();
+        if (($rejection = $this->rejectIfCannotMutateLiveSession()) !== null) {
+            return $rejection;
+        }
 
         if ($this->activeSubscriptions->isSubscribedAll()) {
             return $this->resolvedVoid();
@@ -123,12 +128,14 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             return $this->resolvedVoid();
         }
 
-        $this->assertCanMutateLiveSession();
+        if (($rejection = $this->rejectIfCannotMutateLiveSession()) !== null) {
+            return $rejection;
+        }
 
         if ($this->activeSubscriptions->isSubscribedAll()) {
-            throw new ConnectionException(
+            return reject(new ConnectionException(
                 'Cannot unsubscribe specific events while subscribed to all events in the current implementation',
-            );
+            ));
         }
 
         $desired = array_values(array_filter(
@@ -180,7 +187,9 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
     public function addFilter(string $headerName, string $headerValue): PromiseInterface
     {
-        $this->assertCanMutateLiveSession();
+        if (($rejection = $this->rejectIfCannotMutateLiveSession()) !== null) {
+            return $rejection;
+        }
 
         if ($this->filters->hasFilter($headerName, $headerValue)) {
             return $this->resolvedVoid();
@@ -210,7 +219,9 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
     public function removeFilter(string $headerName, string $headerValue): PromiseInterface
     {
-        $this->assertCanMutateLiveSession();
+        if (($rejection = $this->rejectIfCannotMutateLiveSession()) !== null) {
+            return $rejection;
+        }
 
         if (!$this->filters->hasFilter($headerName, $headerValue)) {
             return $this->resolvedVoid();
@@ -389,6 +400,23 @@ final class SubscriptionManager implements SubscriptionManagerInterface
     private function assertCanMutateLiveSession(): void
     {
         ($this->assertCanMutateLiveSession)();
+    }
+
+    /**
+     * @return PromiseInterface<void>|null
+     */
+    private function rejectIfCannotMutateLiveSession(): ?PromiseInterface
+    {
+        try {
+            $this->assertCanMutateLiveSession();
+        } catch (\Throwable $e) {
+            /** @var PromiseInterface<void> $promise */
+            $promise = reject($e);
+
+            return $promise;
+        }
+
+        return null;
     }
 
     /**

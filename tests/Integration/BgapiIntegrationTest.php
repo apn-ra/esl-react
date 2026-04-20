@@ -116,6 +116,17 @@ final class BgapiIntegrationTest extends AsyncTestCase
 
         $handle = $client->bgapi('status');
 
+        $resolved = false;
+        $rejected = null;
+        $handle->promise()->then(
+            function () use (&$resolved): void {
+                $resolved = true;
+            },
+            function (\Throwable $e) use (&$rejected): void {
+                $rejected = $e;
+            },
+        );
+
         $this->waitUntil(
             fn (): bool => $handle->jobUuid() === $jobUuid
                 && $client->health()->snapshot()->pendingBgapiJobCount === 1,
@@ -129,11 +140,15 @@ final class BgapiIntegrationTest extends AsyncTestCase
             self::assertSame('bgapi status', $e->eslCommand());
         }
 
+        self::assertFalse($resolved);
+        self::assertInstanceOf(CommandTimeoutException::class, $rejected);
         self::assertSame(0, $client->health()->snapshot()->pendingBgapiJobCount);
 
         $server->emitBackgroundJobEvent($jobUuid, "+OK late completion\n", 'status');
         $this->runLoopFor(0.02);
 
+        self::assertFalse($resolved);
+        self::assertInstanceOf(CommandTimeoutException::class, $rejected);
         self::assertSame(0, $client->health()->snapshot()->pendingBgapiJobCount);
 
         $server->close();

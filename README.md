@@ -17,7 +17,7 @@ Current implementation status:
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`, fails closed, stops autonomous reconnect for that startup attempt, and surfaces `handshake_timeout` on the runner reconnect/status snapshots.
 - `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
-Release-prep note for the current accumulated runner-feedback checkpoint:
+Release note and tag-prep summary for the current patch release:
 [docs/release-prep-v0.2.11.md](docs/release-prep-v0.2.11.md)
 
 ---
@@ -261,6 +261,14 @@ $client->api('status')->then(
 );
 ```
 
+Implemented `api()` timeout posture in the current slice:
+
+- if the reply does not arrive before `apiTimeoutSeconds`, the promise rejects with `CommandTimeoutException`
+- that timeout is treated as a fail-closed reply-correlation failure for the current connection
+- the runtime closes the compromised connection instead of continuing normal `api()` flow on the same reply slot
+- any late reply that arrives on that compromised session is ignored
+- later command work resumes only after the runtime has re-established a clean connection boundary
+
 ### bgapi command
 
 `bgapi` commands return a `BgapiJobHandle` immediately. The handle becomes correlated once FreeSWITCH acknowledges the command with a `Job-UUID`, and the handle's promise resolves only when the matching `BACKGROUND_JOB` completion event arrives.
@@ -384,7 +392,8 @@ Current subscription/filter contract:
 
 - The baseline is explicit and caller-owned. The runtime does not silently subscribe to a broad event set for application code.
 - `RuntimeConfig::$subscriptions` seeds the runtime's initial desired event/filter state before the first successful connect/auth cycle.
-- Subscription and filter mutations are rejected before successful authentication and after disconnect.
+- Subscription and filter mutations reject their returned promises before successful authentication, during reconnect recovery, during drain, and after disconnect.
+- Normal runtime gating failures on these promise-returning methods do not leak synchronous throws in normal use; promise consumers can rely on `then(null, $onError)`.
 - The runtime tracks desired active subscriptions and filters in memory and restores them after a successful reconnect.
 - Duplicate subscribe/filter-add operations are idempotent no-ops.
 - Unsubscribing an inactive event name or removing a missing filter is a no-op.

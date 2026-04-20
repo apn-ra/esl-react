@@ -60,11 +60,12 @@ Subscription and filter mutations use the same authenticated live-session comman
 - `subscribeAll()` switches the desired state to all events.
 - `addFilter()` and `removeFilter()` mutate the live session and the in-memory desired filter set together.
 - Duplicate subscribe/filter-add operations and removal of missing state are treated as deterministic no-ops.
-- Mutations before successful authentication, while draining, or after disconnect are rejected with `ConnectionException`.
+- Mutations before successful authentication, during reconnect recovery, while draining, or after disconnect reject the returned promise rather than throwing synchronously in normal use.
+- Those rejection paths use `ConnectionException`, `BackpressureException`, or `DrainException` according to the current runtime gate that denied the mutation.
 
 The desired subscription/filter state is intentionally kept in memory so the runtime can restore it after a successful reconnect. That desired state is initially seeded from `RuntimeConfig::$subscriptions`, then mutated by live-session subscription/filter calls. Broader replay semantics are still not implemented in this phase. No mutation queue exists during recovery: subscription/filter mutations attempted while reconnect is in progress reject with `ConnectionException`.
 
-When the runtime is overloaded, subscription/filter mutations reject with `BackpressureException`. When the runtime is draining, they reject with `DrainException`.
+When the runtime is overloaded, subscription/filter mutations reject with `BackpressureException`. When the runtime is draining, they reject with `DrainException`. If `subscribeAll()` is active, a later specific `unsubscribe()` also rejects with `ConnectionException` in the current implementation.
 
 ## Reconnect and recovery command behavior
 
@@ -145,9 +146,10 @@ $config = new \Apntalk\EslReact\Config\CommandTimeoutConfig(
 ```
 
 - If an `api` command does not receive a reply within `apiTimeoutSeconds`, its promise is rejected with `CommandTimeoutException`.
+- After an `api()` timeout, the runtime treats the reply slot for that connection as ambiguous, closes the connection fail-closed, rejects new `api()` work on that compromised session, and ignores any late reply that arrives before the close completes.
 - If a `bgapi` acknowledgment is not received within `bgapiAckTimeoutSeconds`, the handle's promise is rejected with `CommandTimeoutException`.
 - If a `bgapi` completion event is not received within `bgapiOrphanTimeoutSeconds`, the handle's promise is rejected with `CommandTimeoutException`.
-- After timeout, any late reply or completion that arrives for the timed-out operation is silently discarded.
+- For `bgapi`, any late acknowledgment or completion that arrives after timeout is silently discarded.
 
 ---
 

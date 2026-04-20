@@ -139,6 +139,42 @@ final class SubscriptionAndFilterIntegrationTest extends AsyncTestCase
         }
     }
 
+    public function testSubscriptionMutationBeforeAuthRejectsReturnedPromiseInsteadOfThrowingSynchronously(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $client = AsyncEslRuntime::make(
+            RuntimeConfig::create(host: '127.0.0.1', port: $server->port(), password: 'ClueCon'),
+            $this->loop,
+        );
+
+        $rejected = null;
+
+        try {
+            $promise = $client->subscriptions()->subscribe('CHANNEL_CREATE');
+        } catch (\Throwable $e) {
+            $server->close();
+            self::fail(sprintf('Expected rejected promise, got synchronous %s: %s', $e::class, $e->getMessage()));
+        }
+
+        $promise->then(
+            null,
+            function (\Throwable $e) use (&$rejected): void {
+                $rejected = $e;
+            },
+        );
+
+        try {
+            $this->await($promise);
+            self::fail('Expected subscribe() to reject before authentication');
+        } catch (ConnectionException $e) {
+            self::assertSame('Runtime is not authenticated', $e->getMessage());
+        } finally {
+            self::assertInstanceOf(ConnectionException::class, $rejected);
+            self::assertSame([], $server->receivedCommands());
+            $server->close();
+        }
+    }
+
     public function testFilterMutationBeforeAuthIsRejected(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -204,6 +240,44 @@ final class SubscriptionAndFilterIntegrationTest extends AsyncTestCase
         try {
             $this->await($client->subscriptions()->unsubscribe('CHANNEL_CREATE'));
         } finally {
+            $server->close();
+        }
+    }
+
+    public function testSpecificUnsubscribeFromSubscribeAllRejectsReturnedPromiseInsteadOfThrowingSynchronously(): void
+    {
+        $server = $this->authenticatedServer();
+        $client = $this->authenticatedClient($server);
+
+        $this->await($client->subscriptions()->subscribeAll());
+
+        $rejected = null;
+
+        try {
+            $promise = $client->subscriptions()->unsubscribe('CHANNEL_CREATE');
+        } catch (\Throwable $e) {
+            $server->close();
+            self::fail(sprintf('Expected rejected promise, got synchronous %s: %s', $e::class, $e->getMessage()));
+        }
+
+        $promise->then(
+            null,
+            function (\Throwable $e) use (&$rejected): void {
+                $rejected = $e;
+            },
+        );
+
+        try {
+            $this->await($promise);
+            self::fail('Expected unsubscribe() from subscribeAll() to reject');
+        } catch (ConnectionException $e) {
+            self::assertSame(
+                'Cannot unsubscribe specific events while subscribed to all events in the current implementation',
+                $e->getMessage(),
+            );
+        } finally {
+            self::assertInstanceOf(ConnectionException::class, $rejected);
+            self::assertSame(['auth ClueCon', 'event plain all'], $server->receivedCommands());
             $server->close();
         }
     }

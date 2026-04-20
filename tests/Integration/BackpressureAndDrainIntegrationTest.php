@@ -68,6 +68,70 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         $server->close();
     }
 
+    public function testOverloadRejectsSubscriptionMutationViaReturnedPromise(): void
+    {
+        $server = $this->authenticatedServer();
+        $client = $this->authenticatedClient(
+            $server,
+            RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: $server->port(),
+                password: 'ClueCon',
+                heartbeat: HeartbeatConfig::disabled(),
+                backpressure: BackpressureConfig::withLimit(1, 0.05),
+            ),
+        );
+
+        $server->queueCommandHandler(static function ($connection, string $command): void {
+            self::assertSame('api status', $command);
+        });
+
+        $first = $client->api('status');
+        $first->then(null, static function (): void {
+        });
+
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->totalInflightCount === 1
+                && $client->health()->snapshot()->isOverloaded,
+            0.2,
+        );
+
+        $rejected = null;
+
+        try {
+            $promise = $client->subscriptions()->subscribe('CHANNEL_CREATE');
+        } catch (\Throwable $e) {
+            $server->close();
+            self::fail(sprintf('Expected rejected promise, got synchronous %s: %s', $e::class, $e->getMessage()));
+        }
+
+        $promise->then(
+            null,
+            function (\Throwable $e) use (&$rejected): void {
+                $rejected = $e;
+            },
+        );
+
+        try {
+            $this->await($promise, 0.1);
+            self::fail('Expected subscribe() overload rejection');
+        } catch (BackpressureException $e) {
+            self::assertSame('Runtime overloaded (1 inflight, limit 1)', $e->getMessage());
+        }
+
+        self::assertInstanceOf(BackpressureException::class, $rejected);
+
+        $this->await($client->disconnect(), 0.2);
+
+        try {
+            $this->await($first, 0.2);
+            self::fail('Expected inflight api() to terminate during drain');
+        } catch (DrainException) {
+        }
+
+        $server->close();
+    }
+
     public function testOverloadRejectsNewBgapiWorkDeterministically(): void
     {
         $server = $this->authenticatedServer();
@@ -187,6 +251,61 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         self::assertFalse($snapshot->isOverloaded);
         self::assertSame(1, $server->connectionCount());
 
+        $server->close();
+    }
+
+    public function testDrainRejectsSubscriptionMutationViaReturnedPromise(): void
+    {
+        $server = $this->authenticatedServer();
+        $client = $this->authenticatedClient(
+            $server,
+            RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: $server->port(),
+                password: 'ClueCon',
+                heartbeat: HeartbeatConfig::disabled(),
+                backpressure: BackpressureConfig::withLimit(5, 0.2),
+            ),
+        );
+
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('exit', $command);
+            $server->writeCommandReply($connection, '+OK bye');
+        });
+
+        $disconnect = $client->disconnect();
+
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
+                && $client->health()->snapshot()->isDraining,
+            0.1,
+        );
+
+        $rejected = null;
+
+        try {
+            $promise = $client->subscriptions()->subscribe('CHANNEL_CREATE');
+        } catch (\Throwable $e) {
+            $server->close();
+            self::fail(sprintf('Expected rejected promise, got synchronous %s: %s', $e::class, $e->getMessage()));
+        }
+
+        $promise->then(
+            null,
+            function (\Throwable $e) use (&$rejected): void {
+                $rejected = $e;
+            },
+        );
+
+        try {
+            $this->await($promise, 0.1);
+            self::fail('Expected subscribe() rejection during drain');
+        } catch (DrainException) {
+        }
+
+        self::assertInstanceOf(DrainException::class, $rejected);
+
+        $this->await($disconnect, 0.2);
         $server->close();
     }
 

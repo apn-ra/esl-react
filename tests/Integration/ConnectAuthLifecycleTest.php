@@ -5,6 +5,7 @@ namespace Apntalk\EslReact\Tests\Integration;
 use Apntalk\EslCore\Replies\ApiReply;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Config\CommandTimeoutConfig;
+use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
@@ -129,6 +130,7 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
                 port: $server->port(),
                 password: 'ClueCon',
                 commandTimeout: CommandTimeoutConfig::withApiTimeout(0.05),
+                retryPolicy: RetryPolicy::disabled(),
             ),
             $this->loop,
         );
@@ -225,6 +227,7 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
                 port: $server->port(),
                 password: 'ClueCon',
                 commandTimeout: CommandTimeoutConfig::withApiTimeout(0.05),
+                retryPolicy: RetryPolicy::disabled(),
             ),
             $this->loop,
         );
@@ -238,11 +241,76 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
             self::assertSame('api status', $e->eslCommand());
         }
 
+        $this->waitUntil(
+            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            0.25,
+        );
+
         $snapshot = $client->health()->snapshot();
-        self::assertSame(ConnectionState::Authenticated, $snapshot->connectionState);
-        self::assertSame(SessionState::Active, $snapshot->sessionState);
+        self::assertSame(ConnectionState::Disconnected, $snapshot->connectionState);
+        self::assertSame(SessionState::Disconnected, $snapshot->sessionState);
         self::assertSame(CommandTimeoutException::class, $snapshot->lastErrorClass);
-        self::assertTrue($snapshot->isLive);
+        self::assertFalse($snapshot->isLive);
+
+        $server->close();
+    }
+
+    public function testLateApiReplyAfterTimeoutCannotCrossWireIntoLaterCommand(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $firstApiConnection = null;
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(static function ($connection, string $command) use (&$firstApiConnection): void {
+            self::assertSame('api status', $command);
+            $firstApiConnection = $connection;
+        });
+
+        $client = AsyncEslRuntime::make(
+            RuntimeConfig::create(
+                host: '127.0.0.1',
+                port: $server->port(),
+                password: 'ClueCon',
+                commandTimeout: CommandTimeoutConfig::withApiTimeout(0.05),
+            ),
+            $this->loop,
+        );
+
+        $this->await($client->connect());
+
+        try {
+            $this->await($client->api('status'), 0.25);
+            self::fail('Expected first api() to time out');
+        } catch (CommandTimeoutException $e) {
+            self::assertSame('api status', $e->eslCommand());
+        }
+
+        self::assertNotNull($firstApiConnection);
+
+        $second = $client->api('version');
+        $server->writeApiResponse($firstApiConnection, "+OK late status payload\n");
+
+        try {
+            $this->await($second, 0.25);
+            self::fail('Expected second api() to reject after timeout ambiguity');
+        } catch (ConnectionLostException $e) {
+            self::assertSame(
+                'Reply correlation is ambiguous after api timeout; connection reset required before new api commands',
+                $e->getMessage(),
+            );
+        } catch (ConnectionException $e) {
+            self::assertSame('Runtime is not authenticated', $e->getMessage());
+        }
+
+        $this->runLoopFor(0.02);
+
+        $snapshot = $client->health()->snapshot();
+        self::assertSame(['auth ClueCon', 'api status'], $server->receivedCommands());
+        self::assertNotSame(ConnectionState::Authenticated, $snapshot->connectionState);
+        self::assertNotSame(SessionState::Active, $snapshot->sessionState);
+        self::assertFalse($snapshot->isLive);
 
         $server->close();
     }

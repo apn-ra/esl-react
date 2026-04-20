@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Latest checkpoint release prep note on this line:
+- No unreleased changes documented yet.
+
+## [0.2.11] - 2026-04-20
+
+Release prep note for this patch:
 [docs/release-prep-v0.2.11.md](docs/release-prep-v0.2.11.md)
 
 ### Added
@@ -17,13 +21,16 @@ Latest checkpoint release prep note on this line:
 
 ### Changed
 - Runtime dependency now targets `apntalk/esl-core ^0.2.13`; the compatibility pass keeps `esl-react` on its existing ReactPHP runtime seams while aligning the inbound reply router with the `v0.2.13` public classified-message contract and revalidating replay-envelope compatibility
+- `api()` timeout handling is now fail-closed: once a synchronous api reply times out, the runtime treats reply correlation on that connection as ambiguous, rejects new api work on the compromised session, ignores late replies, and closes the connection to avoid late-reply cross-wiring into later commands
+- Subscription and filter mutation methods now reject their returned promises consistently for live-session gating failures and the current `subscribeAll()`-specific unsubscribe limitation, so promise-chain consumers do not have to defend against synchronous throws on those paths
 - Runtime feedback semantics are now more explicit: runner feedback distinguishes exact desired subscription/filter state, exact reconnect retry scheduling truth, and exact command-bus active vs queued API counts without changing existing runtime behavior
 - Runner status semantics are now explicit: the new export seam distinguishes exact runtime-recorded connect/disconnect/failure timestamps from optional bounded disconnect-cause detail, and does not over-claim process-level loop liveness or cross-process supervision
 - Runtime feedback now also distinguishes exact desired subscription/filter state from conservative locally observed-applied state for the current authenticated session, with explicit invalidation on reconnect and rebuild after restore completes
 - Runtime feedback now also exposes additive reconnect/backoff detail, including exact reconnect phase and attempt/delay truth plus conservative local next-due and remaining-delay timing estimates when a retry timer is pending
 - Runtime feedback now also exposes additive terminal reconnect-stop truth, including exact terminal-stop/exhaustion booleans plus conservative runtime-known stop categories such as explicit shutdown, retry exhaustion/disabled retry, auth rejection, and handshake failure
 - Runtime feedback now also retains additive terminal reconnect timing context, including exact terminal-stop and retry-attempt timestamps plus last retained scheduler timing, while keeping elapsed-stop duration explicitly derived from local wall-clock packaging
-- Release-facing docs and public-contract coverage now package the accumulated runner feedback and status surfaces more explicitly, including desired vs observed subscription wording, exact vs approximate vs derived reconnect timing semantics, handshake-timeout terminal stop truth, preserved bounded disconnect-cause detail, and the intentional coarse lifecycle-callback vs richer feedback/status contract split
+- Release-facing docs and public-contract coverage now package the accumulated runner feedback and status surfaces more explicitly, including desired vs observed subscription wording, exact vs approximate vs derived reconnect timing semantics, handshake-timeout plus handshake-protocol-failure terminal stop truth, preserved bounded disconnect-cause detail, and the intentional coarse lifecycle-callback vs richer feedback/status contract split
+- Deterministic hardening coverage now proves late orphaned `bgapi()` completion remains a no-op after timeout instead of reviving settled state
 
 ## [0.2.7] - 2026-04-17
 

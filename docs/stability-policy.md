@@ -81,7 +81,9 @@ The following behaviors are considered stable even when the implementing types a
 - Bgapi job survival across reconnect
 - Subscription restore after reconnect
 - `ConnectionLostException` on inflight api commands during unexpected transport loss
+- Fail-closed `api()` timeout behavior: timeout rejects the command, treats the current reply slot as ambiguous, and closes the compromised connection before later command flow continues
 - `DrainException` on accepted inflight work that is terminated by explicit bounded drain
+- Promise-rejection semantics for normal subscription/filter mutation gating failures on the `SubscriptionManagerInterface` promise-returning methods
 - `RuntimeRunnerHandle::onLifecycleChange()` immediate current-snapshot delivery and synchronous ordered callback semantics
 - `RuntimeRunnerHandle::feedbackSnapshot()` as a stable packaging of existing health truth plus prepared runtime identity
 - `RuntimeRunnerHandle::statusSnapshot()` as a stable export packaging of runtime-owned lifecycle/reconnect truth plus recent connect/disconnect/failure observations

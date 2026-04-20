@@ -29,12 +29,15 @@ final class AsyncCommandBus
     /** @var array{command: CommandInterface, pending: PendingCommand}|null */
     private ?array $inflight = null;
     private bool $draining = false;
+    private bool $replyCorrelationCompromised = false;
 
     public function __construct(
         /** callable(CommandInterface): void */
         private readonly \Closure $sendFn,
         private readonly LoopInterface $loop,
         private readonly int $maxQueued = 50,
+        /** @var null|\Closure(\Throwable): void */
+        private readonly ?\Closure $onReplyCorrelationCompromised = null,
     ) {}
 
     /**
@@ -44,6 +47,11 @@ final class AsyncCommandBus
      */
     public function dispatch(CommandInterface $command, string $description, float $timeoutSeconds): PromiseInterface
     {
+        if ($this->replyCorrelationCompromised) {
+            return \React\Promise\reject(new ConnectionLostException(
+                'Reply correlation is ambiguous after api timeout; connection reset required before new api commands',
+            ));
+        }
         if ($this->draining) {
             return \React\Promise\reject(new DrainException());
         }
@@ -68,6 +76,11 @@ final class AsyncCommandBus
      */
     public function onReply(ReplyInterface $reply): void
     {
+        if ($this->replyCorrelationCompromised) {
+            // Late replies after an api timeout are ambiguous because api replies
+            // have no request identifier. Ignore them until the connection resets.
+            return;
+        }
         if ($this->inflight === null) {
             // Unexpected reply — ignore
             return;
@@ -85,6 +98,7 @@ final class AsyncCommandBus
      */
     public function onConnectionLost(): void
     {
+        $this->replyCorrelationCompromised = false;
         $this->abortAll(new ConnectionLostException());
     }
 
@@ -132,6 +146,10 @@ final class AsyncCommandBus
         foreach ($queue as $entry) {
             $entry['pending']->reject($reason);
         }
+
+        if ($reason instanceof ConnectionLostException) {
+            $this->replyCorrelationCompromised = false;
+        }
     }
 
     private function pump(): void
@@ -152,8 +170,10 @@ final class AsyncCommandBus
             }
             $inflight = $this->inflight;
             $this->inflight = null;
-            $inflight['pending']->reject(new CommandTimeoutException($description, $timeoutSeconds));
-            $this->pump();
+            $timeout = new CommandTimeoutException($description, $timeoutSeconds);
+            $inflight['pending']->reject($timeout);
+            $this->replyCorrelationCompromised = true;
+            ($this->onReplyCorrelationCompromised)?->__invoke($timeout);
         });
         $entry['pending']->attachTimer($timer);
 

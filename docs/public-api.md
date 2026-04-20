@@ -97,8 +97,8 @@ Apntalk\EslReact\Contracts\SubscriptionManagerInterface
 
 | Method | Description |
 |---|---|
-| `subscribe(string $eventName): PromiseInterface<void>` | Subscribe to a named event |
-| `unsubscribe(string $eventName): PromiseInterface<void>` | Unsubscribe from a named event |
+| `subscribe(string ...$eventNames): PromiseInterface<void>` | Subscribe to one or more named events |
+| `unsubscribe(string ...$eventNames): PromiseInterface<void>` | Unsubscribe from one or more named events |
 | `subscribeAll(): PromiseInterface<void>` | Subscribe to all events |
 | `addFilter(string $header, string $value): PromiseInterface<void>` | Add an inbound filter |
 | `removeFilter(string $header, string $value): PromiseInterface<void>` | Remove an inbound filter |
@@ -109,9 +109,10 @@ Current subscription/filter notes:
 - The baseline is explicit and caller-owned; the runtime does not invent a broad default application subscription policy.
 - `RuntimeConfig::$subscriptions` seeds the initial desired event/filter state before the first successful authentication.
 - Mutations are only allowed while the runtime is authenticated and not draining.
+- Normal runtime gating failures on these promise-returning methods reject the returned promise rather than throwing synchronously; promise consumers can rely on `then(null, ...)` observing `ConnectionException`, `BackpressureException`, or `DrainException` as applicable.
 - Desired active subscriptions and filters are tracked locally in memory.
 - Duplicate subscribe/filter-add operations and removal of missing state are idempotent no-ops.
-- `subscribeAll()` is supported, but specific unsubscribe from the "all events" state is rejected in the current implementation.
+- `subscribeAll()` is supported, but specific unsubscribe from the "all events" state rejects with `ConnectionException` in the current implementation.
 - After a successful reconnect, the runtime restores `subscribeAll()` or the named desired event set first, then restores desired filters.
 - When the runtime is overloaded, subscription/filter mutations are rejected with `BackpressureException`.
 

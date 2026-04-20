@@ -995,6 +995,75 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->close();
     }
 
+    public function testRunnerFeedbackSnapshotExposesHandshakeProtocolFailureTerminalReconnectTruth(): void
+    {
+        $server = new ScriptedFakeEslServer(
+            $this->loop,
+            autoAuthRequest: false,
+            onConnection: function ($connection) use (&$server): void {
+                $this->loop->addTimer(0.01, function () use ($connection, $server): void {
+                    $server->writeRawFrame($connection, "Content-Type auth/request\n\n");
+                });
+            },
+        );
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(2, 0.01),
+                    heartbeat: HeartbeatConfig::disabled(),
+                    commandTimeout: CommandTimeoutConfig::withApiTimeout(0.05),
+                ),
+            ),
+            $this->loop,
+        );
+
+        try {
+            $this->await($handle->startupPromise(), 0.3);
+            self::fail('Expected startup to fail on malformed connect/auth handshake traffic');
+        } catch (ConnectionException $e) {
+            self::assertSame('Malformed inbound frame during connect/auth handshake', $e->getMessage());
+        }
+
+        self::assertSame(RuntimeRunnerState::Failed, $handle->state());
+        self::assertInstanceOf(ConnectionException::class, $handle->startupError());
+
+        $feedback = $handle->feedbackSnapshot();
+        self::assertSame(ConnectionState::Disconnected, $feedback->connectionState());
+        self::assertSame(SessionState::Failed, $feedback->sessionState());
+        self::assertSame(RuntimeReconnectPhase::Idle, $feedback->reconnectState()->phase);
+        self::assertFalse($feedback->reconnectState()->isRetryScheduled);
+        self::assertTrue($feedback->reconnectState()->isTerminallyStopped);
+        self::assertFalse($feedback->reconnectState()->isRetryExhausted);
+        self::assertTrue($feedback->reconnectState()->requiresExternalIntervention);
+        self::assertTrue($feedback->reconnectState()->isFailClosedTerminalState);
+        self::assertSame(
+            RuntimeReconnectStopReason::HandshakeProtocolFailure,
+            $feedback->reconnectState()->terminalStopReason,
+        );
+        self::assertNotNull($feedback->reconnectState()->terminalStoppedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastRetryAttemptStartedAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledRetryDueAtMicros);
+        self::assertNull($feedback->reconnectState()->lastScheduledBackoffDelaySeconds);
+        self::assertGreaterThanOrEqual(0.0, $feedback->reconnectState()->terminalStoppedDurationSeconds ?? -1.0);
+
+        $status = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Failed, $status->phase);
+        self::assertFalse($status->isRuntimeActive);
+        self::assertFalse($status->isRecoveryInProgress);
+        self::assertSame(ConnectionException::class, $status->lastFailureClass);
+        self::assertSame(
+            RuntimeReconnectStopReason::HandshakeProtocolFailure,
+            $status->reconnectState->terminalStopReason,
+        );
+
+        $server->close();
+    }
+
     public function testRunnerLifecycleSnapshotObservesReconnectAndTerminalDisconnect(): void
     {
         $server = new ScriptedFakeEslServer($this->loop);
@@ -1481,7 +1550,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         }
 
         try {
-            $handle->client()->subscriptions()->subscribe('CHANNEL_ANSWER');
+            $this->await($handle->client()->subscriptions()->subscribe('CHANNEL_ANSWER'));
             self::fail('Expected subscription mutation to fail closed while reconnecting');
         } catch (ConnectionException $e) {
             self::assertSame('Runtime is not authenticated', $e->getMessage());
