@@ -9,6 +9,7 @@ Hardening note for the implemented slice:
 - Unexpected or malformed inbound frames during the handshake fail closed, reject `connect()`, and surface `handshake_protocol_failure` as the terminal reconnect stop reason on the runner feedback/status surfaces.
 - After authentication succeeds, inbound event frames are delivered immediately on the live socket.
 - After an unexpected disconnect and successful re-authentication, the runtime restores the in-memory desired subscription baseline first and then restores filters before transitioning back to `Authenticated`/`Active`.
+- If the restore leg itself receives a server `-ERR`, the runtime does not transition to `Authenticated`/`Active`; it closes that session and continues supervised reconnect according to the retry policy.
 - Replay capture, when enabled, survives an unexpected reconnect for later runtime traffic because it stays attached to the surviving runtime instance. It does not persist lost traffic or provide process-restart recovery.
 
 ## State machines
@@ -96,8 +97,8 @@ the connection, an opt-in live harness can validate the expected sequence
 For richer prepared-bootstrap inputs, the prepared connector participates in
 the normal `ConnectionState` transitions because it supplies the live connection
 for startup and reconnect attempts. The prepared ingress pipeline is reset as
-part of runner handoff consumption, but decoded-pipeline routing is not yet the
-live ingress path.
+part of runner handoff consumption and then reused as the live inbound decode
+path for startup and reconnect attempts on that runtime instance.
 When the richer input also implements the additive prepared dial-target
 contract, that same explicit dial URI is reused for both startup and reconnect
 attempts instead of forcing `RuntimeConfig::connectionUri()`.
@@ -124,7 +125,7 @@ Observation note for shutdown and reconnect:
 | `Connecting` | TCP connection is being established. |
 | `Connected` | TCP connection is established; authentication has not yet started or completed. |
 | `Authenticating` | The ESL auth challenge has been received and credentials are being sent. |
-| `Authenticated` | Authentication succeeded. The runtime is ready to send commands and receive events. |
+| `Authenticated` | Authentication has succeeded and any immediate post-auth desired-state restore has completed. The runtime is ready to send commands and receive events. |
 | `Reconnecting` | The connection was lost and the supervisor is executing a retry attempt. |
 | `Draining` | The runtime has been asked to shut down. New work is rejected immediately while accepted inflight work gets a bounded settle window. |
 | `Closed` | The runtime has been explicitly shut down. No further reconnects will occur for this runtime instance. |
@@ -144,7 +145,7 @@ Connected
   -> Authenticating        on auth-request message received from FreeSWITCH
 
 Authenticating
-  -> Authenticated         on auth reply +OK
+  -> Authenticated         on auth reply +OK and successful post-auth restore
   -> Disconnected          on auth reply -ERR (no retry for auth failure)
   -> Disconnected          on handshake timeout or malformed/unexpected inbound handshake frame
 
@@ -206,7 +207,7 @@ Each reconnect cycle creates a new session. The `SessionState` of the prior sess
 | `connect()` called | `Disconnected` → `Connecting` | — |
 | TCP established | `Connecting` → `Connected` | — |
 | Auth-request received | `Connected` → `Authenticating` | `NotStarted` → `Authenticating` |
-| Auth reply +OK | `Authenticating` → `Authenticated` | `Authenticating` → `Active` |
+| Auth reply +OK plus successful post-auth restore | `Authenticating` → `Authenticated` | `Authenticating` → `Active` |
 | Auth reply -ERR | `Authenticating` → `Disconnected` | `Authenticating` → `Failed` |
 | Socket error or close while Authenticated | `Authenticated` → `Reconnecting` | `Active` → `Disconnected` |
 | Retry attempt fired | `Reconnecting` → `Connecting` | — |
@@ -226,6 +227,7 @@ In the currently implemented slice, when the transport drops unexpectedly (socke
 4. Commands that are enqueued but not yet sent are also rejected with `ConnectionLostException`.
 5. Pending `bgapi` jobs that have already been accepted remain tracked across unexpected supervised reconnect. They are rejected only on explicit shutdown, drain deadline expiry, or when their orphan timeout expires.
 6. Desired subscriptions and filters remain tracked in memory and are restored after re-authentication in this order: event baseline first, then filters.
+7. The runtime only returns to `Authenticated` / `Active` after that restore succeeds; a restore-phase server `-ERR` closes the session and keeps recovery in the reconnect path.
 
 ## What happens on heartbeat degradation
 
@@ -269,7 +271,7 @@ Reconnect is triggered by any transition to `Reconnecting`. This can be caused b
 
 Reconnect is NOT triggered by:
 
-- Calling `disconnect()` (clean disconnect, transitions to `Disconnected` then `Closed`)
+- Calling `disconnect()` (clean disconnect, transitions through `Draining` and then `Closed`)
 - Auth failure
 - Handshake timeout
 - Malformed or unexpected inbound handshake traffic

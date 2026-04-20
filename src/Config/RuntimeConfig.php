@@ -1,9 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Config;
 
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
+use InvalidArgumentException;
 
-final class RuntimeConfig {
+final class RuntimeConfig
+{
     private function __construct(
         public readonly string $host,
         public readonly int $port,
@@ -18,13 +23,13 @@ final class RuntimeConfig {
         public readonly array $replayCaptureSinks,
     ) {
         if ($this->host === '') {
-            throw new \InvalidArgumentException('host must not be empty');
+            throw new InvalidArgumentException('host must not be empty');
         }
         if ($this->port < 1 || $this->port > 65535) {
-            throw new \InvalidArgumentException('port must be between 1 and 65535');
+            throw new InvalidArgumentException('port must be between 1 and 65535');
         }
         if ($this->replayCaptureEnabled && $this->replayCaptureSinks === []) {
-            throw new \InvalidArgumentException('replayCaptureSinks must not be empty when replay capture is enabled');
+            throw new InvalidArgumentException('replayCaptureSinks must not be empty when replay capture is enabled');
         }
     }
 
@@ -54,7 +59,8 @@ final class RuntimeConfig {
         );
     }
 
-    public function connectionUri(): string {
+    public function connectionUri(): string
+    {
         return sprintf('tcp://%s:%d', $this->host, $this->port);
     }
 }

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -12,6 +14,7 @@ use Apntalk\EslReact\Exceptions\BackpressureException;
 use Apntalk\EslReact\Exceptions\DrainException;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
+use Throwable;
 
 final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
 {
@@ -34,11 +37,10 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         });
 
         $first = $client->api('status');
-        $first->then(null, static function (): void {
-        });
+        $first->then(null, static function (): void {});
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->totalInflightCount === 1
+            fn(): bool => $client->health()->snapshot()->totalInflightCount === 1
                 && $client->health()->snapshot()->isOverloaded,
             0.2,
         );
@@ -87,11 +89,10 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         });
 
         $first = $client->api('status');
-        $first->then(null, static function (): void {
-        });
+        $first->then(null, static function (): void {});
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->totalInflightCount === 1
+            fn(): bool => $client->health()->snapshot()->totalInflightCount === 1
                 && $client->health()->snapshot()->isOverloaded,
             0.2,
         );
@@ -100,14 +101,14 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
 
         try {
             $promise = $client->subscriptions()->subscribe('CHANNEL_CREATE');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $server->close();
             self::fail(sprintf('Expected rejected promise, got synchronous %s: %s', $e::class, $e->getMessage()));
         }
 
         $promise->then(
             null,
-            function (\Throwable $e) use (&$rejected): void {
+            function (Throwable $e) use (&$rejected): void {
                 $rejected = $e;
             },
         );
@@ -154,7 +155,7 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         $handle = $client->bgapi('status');
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->pendingBgapiJobCount === 1
+            fn(): bool => $client->health()->snapshot()->pendingBgapiJobCount === 1
                 && $client->health()->snapshot()->totalInflightCount === 1
                 && $client->health()->snapshot()->isOverloaded,
             0.2,
@@ -214,7 +215,7 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         $disconnect = $client->disconnect();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
                 && $client->health()->snapshot()->isDraining,
             0.1,
         );
@@ -276,7 +277,7 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         $disconnect = $client->disconnect();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
                 && $client->health()->snapshot()->isDraining,
             0.1,
         );
@@ -285,14 +286,14 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
 
         try {
             $promise = $client->subscriptions()->subscribe('CHANNEL_CREATE');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $server->close();
             self::fail(sprintf('Expected rejected promise, got synchronous %s: %s', $e::class, $e->getMessage()));
         }
 
         $promise->then(
             null,
-            function (\Throwable $e) use (&$rejected): void {
+            function (Throwable $e) use (&$rejected): void {
                 $rejected = $e;
             },
         );
@@ -335,14 +336,14 @@ final class BackpressureAndDrainIntegrationTest extends AsyncTestCase
         $handle = $client->bgapi('status');
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->pendingBgapiJobCount === 1,
+            fn(): bool => $client->health()->snapshot()->pendingBgapiJobCount === 1,
             0.2,
         );
 
         $disconnect = $client->disconnect();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Draining
                 && $client->health()->snapshot()->isDraining,
             0.1,
         );

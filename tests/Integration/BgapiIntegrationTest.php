@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -15,6 +17,7 @@ use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Exceptions\DrainException;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
+use Throwable;
 
 final class BgapiIntegrationTest extends AsyncTestCase
 {
@@ -37,7 +40,7 @@ final class BgapiIntegrationTest extends AsyncTestCase
         self::assertSame('sofia/internal/1000 &echo', $handle->eslArgs());
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() === $jobUuid
+            fn(): bool => $handle->jobUuid() === $jobUuid
                 && $client->health()->snapshot()->pendingBgapiJobCount === 1,
             0.2,
         );
@@ -73,7 +76,7 @@ final class BgapiIntegrationTest extends AsyncTestCase
         $second = $client->bgapi('uuid_kill', 'b-uuid');
 
         $this->waitUntil(
-            fn (): bool => $first->jobUuid() === 'job-a'
+            fn(): bool => $first->jobUuid() === 'job-a'
                 && $second->jobUuid() === 'job-b'
                 && $client->health()->snapshot()->pendingBgapiJobCount === 2,
             0.2,
@@ -122,13 +125,13 @@ final class BgapiIntegrationTest extends AsyncTestCase
             function () use (&$resolved): void {
                 $resolved = true;
             },
-            function (\Throwable $e) use (&$rejected): void {
+            function (Throwable $e) use (&$rejected): void {
                 $rejected = $e;
             },
         );
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() === $jobUuid
+            fn(): bool => $handle->jobUuid() === $jobUuid
                 && $client->health()->snapshot()->pendingBgapiJobCount === 1,
             0.2,
         );
@@ -178,7 +181,7 @@ final class BgapiIntegrationTest extends AsyncTestCase
         $handle = $client->bgapi('originate', 'sofia/internal/2000 &echo');
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() === $jobUuid
+            fn(): bool => $handle->jobUuid() === $jobUuid
                 && $client->health()->snapshot()->pendingBgapiJobCount === 1,
             0.2,
         );
@@ -202,7 +205,7 @@ final class BgapiIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
             0.2,
         );
 
@@ -214,7 +217,7 @@ final class BgapiIntegrationTest extends AsyncTestCase
         }
 
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() === 2
+            fn(): bool => $server->connectionCount() === 2
                 && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
             0.3,
         );
@@ -264,7 +267,7 @@ final class BgapiIntegrationTest extends AsyncTestCase
         $handle = $client->bgapi('status');
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() === $jobUuid
+            fn(): bool => $handle->jobUuid() === $jobUuid
                 && $client->health()->snapshot()->pendingBgapiJobCount === 1,
             0.2,
         );

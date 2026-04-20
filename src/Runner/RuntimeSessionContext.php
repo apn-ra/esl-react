@@ -1,6 +1,10 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
+
+use InvalidArgumentException;
 
 final class RuntimeSessionContext
 {
@@ -16,7 +20,7 @@ final class RuntimeSessionContext
         private readonly ?string $connectorIdentity = null,
     ) {
         if ($this->sessionId === '') {
-            throw new \InvalidArgumentException('sessionId must not be empty');
+            throw new InvalidArgumentException('sessionId must not be empty');
         }
 
         foreach ([
@@ -26,17 +30,17 @@ final class RuntimeSessionContext
             'connectorIdentity' => $this->connectorIdentity,
         ] as $field => $value) {
             if ($value !== null && $value === '') {
-                throw new \InvalidArgumentException(sprintf('%s must not be empty when provided', $field));
+                throw new InvalidArgumentException(sprintf('%s must not be empty when provided', $field));
             }
         }
 
         foreach ($this->metadata as $key => $value) {
             if (!is_string($key)) {
-                throw new \InvalidArgumentException('metadata keys must be strings');
+                throw new InvalidArgumentException('metadata keys must be strings');
             }
 
             if (!is_bool($value) && !is_float($value) && !is_int($value) && !is_string($value) && $value !== null) {
-                throw new \InvalidArgumentException('metadata values must be scalar or null');
+                throw new InvalidArgumentException('metadata values must be scalar or null');
             }
         }
     }
@@ -86,7 +90,7 @@ final class RuntimeSessionContext
             'provider_identity' => $this->providerIdentity,
             'connector_identity' => $this->connectorIdentity,
             ...$this->metadata,
-        ], static fn (mixed $value): bool => $value !== null);
+        ], static fn(mixed $value): bool => $value !== null);
     }
 
     /**

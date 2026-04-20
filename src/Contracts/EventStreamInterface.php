@@ -1,7 +1,11 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Contracts;
 
-interface EventStreamInterface {
+interface EventStreamInterface
+{
     /**
      * Register a listener for a specific event name (e.g., 'CHANNEL_CREATE').
      * The listener receives an EventInterface instance.

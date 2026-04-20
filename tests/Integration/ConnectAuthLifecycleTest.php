@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -191,8 +193,7 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
         );
 
         $connect = $client->connect();
-        $connect->then(null, static function (): void {
-        });
+        $connect->then(null, static function (): void {});
         $this->await($client->disconnect());
 
         try {
@@ -242,7 +243,7 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
         }
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.25,
         );
 
@@ -334,8 +335,7 @@ final class ConnectAuthLifecycleTest extends AsyncTestCase
         $this->await($client->connect());
 
         $api = $client->api('status');
-        $api->then(null, static function (): void {
-        });
+        $api->then(null, static function (): void {});
         $disconnect = $client->disconnect();
 
         $this->await($disconnect);

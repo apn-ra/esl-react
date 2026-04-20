@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\CommandBus;
 
@@ -8,9 +10,11 @@ use Apntalk\EslReact\Exceptions\BackpressureException;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionLostException;
 use Apntalk\EslReact\Exceptions\DrainException;
+use Closure;
 use React\EventLoop\LoopInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+use Throwable;
 
 /**
  * Serial command bus for ESL api commands.
@@ -33,11 +37,11 @@ final class AsyncCommandBus
 
     public function __construct(
         /** callable(CommandInterface): void */
-        private readonly \Closure $sendFn,
+        private readonly Closure $sendFn,
         private readonly LoopInterface $loop,
         private readonly int $maxQueued = 50,
-        /** @var null|\Closure(\Throwable): void */
-        private readonly ?\Closure $onReplyCorrelationCompromised = null,
+        /** @var null|Closure(Throwable): void */
+        private readonly ?Closure $onReplyCorrelationCompromised = null,
     ) {}
 
     /**
@@ -87,7 +91,7 @@ final class AsyncCommandBus
         }
         $inflight = $this->inflight;
         $this->inflight = null;
-        $inflight['pending']->cancelTimer(fn ($t) => $this->loop->cancelTimer($t));
+        $inflight['pending']->cancelTimer(fn($t) => $this->loop->cancelTimer($t));
         $inflight['pending']->resolve($reply);
         $this->pump();
     }
@@ -132,12 +136,12 @@ final class AsyncCommandBus
         return $this->inflightCount() + $this->queuedCount();
     }
 
-    public function abortAll(\Throwable $reason): void
+    public function abortAll(Throwable $reason): void
     {
         if ($this->inflight !== null) {
             $inflight = $this->inflight;
             $this->inflight = null;
-            $inflight['pending']->cancelTimer(fn ($t) => $this->loop->cancelTimer($t));
+            $inflight['pending']->cancelTimer(fn($t) => $this->loop->cancelTimer($t));
             $inflight['pending']->reject($reason);
         }
 
@@ -180,11 +184,11 @@ final class AsyncCommandBus
         // Send the command
         try {
             ($this->sendFn)($entry['command']);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if ($this->inflight !== null) {
                 $inflight = $this->inflight;
                 $this->inflight = null;
-                $inflight['pending']->cancelTimer(fn ($t) => $this->loop->cancelTimer($t));
+                $inflight['pending']->cancelTimer(fn($t) => $this->loop->cancelTimer($t));
                 $inflight['pending']->reject($e);
             }
             $this->pump();

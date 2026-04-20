@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Unit\Runner;
 
@@ -8,6 +10,7 @@ use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use React\Socket\ConnectorInterface;
 
@@ -44,7 +47,7 @@ final class PreparedRuntimeBootstrapInputTest extends TestCase
 
     public function testExplicitEmptyDialUriIsRejected(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('dialUri must not be empty when provided');
 
         new PreparedRuntimeBootstrapInput(
@@ -97,7 +100,7 @@ final class PreparedRuntimeBootstrapInputTest extends TestCase
 
     public function testPreparedBootstrapInputRejectsExplicitReplayEnableWithoutSinks(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('replayCaptureSinks must not be empty when replay capture is enabled');
 
         new PreparedRuntimeBootstrapInput(

@@ -1,8 +1,13 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Contracts;
+
 use Apntalk\EslReact\Health\HealthSnapshot;
 
-interface HealthReporterInterface {
+interface HealthReporterInterface
+{
     /**
      * Return a point-in-time health snapshot.
      * This is always safe to call and never throws.

@@ -1,51 +1,54 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Health;
 
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Contracts\HealthReporterInterface;
 use Apntalk\EslReact\Heartbeat\LivenessState;
-use Apntalk\EslReact\Session\SessionState;
+use Closure;
+use Throwable;
 
 final class RuntimeHealthReporter implements HealthReporterInterface
 {
-    private \Closure $connectionStateProvider;
+    private Closure $connectionStateProvider;
 
-    private \Closure $sessionStateProvider;
+    private Closure $sessionStateProvider;
 
-    private \Closure $livenessProvider;
+    private Closure $livenessProvider;
 
-    private \Closure $inflightCountProvider;
+    private Closure $inflightCountProvider;
 
-    private \Closure $bgapiPendingCountProvider;
+    private Closure $bgapiPendingCountProvider;
 
-    private \Closure $totalInflightCountProvider;
+    private Closure $totalInflightCountProvider;
 
-    private \Closure $overloadedProvider;
+    private Closure $overloadedProvider;
 
-    private \Closure $subscriptionsProvider;
+    private Closure $subscriptionsProvider;
 
-    private \Closure $reconnectAttemptsProvider;
+    private Closure $reconnectAttemptsProvider;
 
-    private \Closure $drainingProvider;
+    private Closure $drainingProvider;
 
-    private \Closure $lastHeartbeatProvider;
+    private Closure $lastHeartbeatProvider;
 
     private ?string $lastErrorClass = null;
     private ?string $lastErrorMessage = null;
 
     public function __construct(
-        \Closure $connectionStateProvider,
-        \Closure $sessionStateProvider,
-        \Closure $livenessProvider,
-        \Closure $inflightCountProvider,
-        \Closure $bgapiPendingCountProvider,
-        \Closure $totalInflightCountProvider,
-        \Closure $overloadedProvider,
-        \Closure $subscriptionsProvider,
-        \Closure $reconnectAttemptsProvider,
-        \Closure $drainingProvider,
-        \Closure $lastHeartbeatProvider,
+        Closure $connectionStateProvider,
+        Closure $sessionStateProvider,
+        Closure $livenessProvider,
+        Closure $inflightCountProvider,
+        Closure $bgapiPendingCountProvider,
+        Closure $totalInflightCountProvider,
+        Closure $overloadedProvider,
+        Closure $subscriptionsProvider,
+        Closure $reconnectAttemptsProvider,
+        Closure $drainingProvider,
+        Closure $lastHeartbeatProvider,
     ) {
         $this->connectionStateProvider = $connectionStateProvider;
         $this->sessionStateProvider = $sessionStateProvider;
@@ -60,7 +63,7 @@ final class RuntimeHealthReporter implements HealthReporterInterface
         $this->lastHeartbeatProvider = $lastHeartbeatProvider;
     }
 
-    public function recordError(\Throwable $e): void
+    public function recordError(Throwable $e): void
     {
         $this->lastErrorClass = get_class($e);
         $this->lastErrorMessage = $e->getMessage();

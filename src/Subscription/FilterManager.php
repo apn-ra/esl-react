@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Subscription;
 
@@ -32,7 +34,7 @@ final class FilterManager
     {
         $this->filters = array_values(array_filter(
             $this->filters,
-            static fn (array $f) => !($f['headerName'] === $headerName && $f['headerValue'] === $headerValue),
+            static fn(array $f) => !($f['headerName'] === $headerName && $f['headerValue'] === $headerValue),
         ));
     }
 

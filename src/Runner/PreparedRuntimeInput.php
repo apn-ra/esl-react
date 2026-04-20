@@ -1,9 +1,12 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
+use InvalidArgumentException;
 
 final class PreparedRuntimeInput implements RuntimeRunnerInputInterface
 {
@@ -12,7 +15,7 @@ final class PreparedRuntimeInput implements RuntimeRunnerInputInterface
         private readonly RuntimeConfig $runtimeConfig,
     ) {
         if ($this->endpoint === '') {
-            throw new \InvalidArgumentException('endpoint must not be empty');
+            throw new InvalidArgumentException('endpoint must not be empty');
         }
     }
 

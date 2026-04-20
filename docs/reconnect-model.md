@@ -72,7 +72,7 @@ When a network error disconnect is classified:
 2. The supervisor increments the attempt counter (`reconnectAttempts` in `HealthSnapshot`).
 3. The scheduler computes the delay for this attempt using the backoff formula.
 4. After the delay, `ConnectionState` transitions to `Connecting` and a new TCP connection is attempted.
-5. If the connection succeeds and auth succeeds, the attempt counter resets to zero.
+5. If the connection succeeds, auth succeeds, and any immediate post-auth restore succeeds, the attempt counter resets to zero.
 6. If the connection fails again or the reconnecting socket closes unexpectedly before recovery completes, the cycle repeats from step 2.
 7. If `maxAttempts` is reached and the attempt fails, `ConnectionState` transitions to `Disconnected` and no further retries occur.
 
@@ -143,6 +143,11 @@ After `ConnectionState` reaches `Authenticated` following a reconnect:
 2. It restores `event plain all` or the named desired event set.
 3. It restores the desired filters.
 4. Only after restore succeeds does the runtime transition back to `Authenticated` / `Active`.
+
+If one of those restore commands receives a server `-ERR`, the runtime treats
+that reconnect attempt as failed recovery: it keeps the desired state intact,
+does not mark the session live, closes the just-authenticated connection, and
+continues supervised reconnect according to the configured retry policy.
 
 If recovery is in progress, new `api()` calls and subscription/filter mutations fail closed instead of being queued for later replay.
 

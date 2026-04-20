@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -98,7 +100,7 @@ final class LiveRuntimeRunnerLivenessCompatibilityTest extends AsyncTestCase
                 && $snapshot->isLive() === false
                 && array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                    static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                         && $marker['session'] === 'active'
                         && $marker['live'] === false
                         && $marker['reconnecting'] === false
@@ -123,7 +125,7 @@ final class LiveRuntimeRunnerLivenessCompatibilityTest extends AsyncTestCase
                 && $snapshot->isLive()
                 && count(array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                    static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                         && $marker['session'] === 'active'
                         && $marker['live'] === true
                         && $marker['reconnecting'] === false
@@ -142,7 +144,7 @@ final class LiveRuntimeRunnerLivenessCompatibilityTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['reconnecting'] === true
+            static fn(array $marker): bool => $marker['reconnecting'] === true
                 || $marker['connection'] === 'reconnecting'
                 || $marker['draining'] === true
                 || $marker['connection'] === 'draining'

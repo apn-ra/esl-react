@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Unit\Protocol;
 
@@ -19,14 +21,14 @@ final class InboundMessageRouterTest extends TestCase
             '',
         );
 
-        $classifier = new class($frame) implements InboundMessageClassifierInterface {
+        $classifier = new class ($frame) implements InboundMessageClassifierInterface {
             public function __construct(private readonly Frame $frame) {}
 
             public function classify(Frame $frame): ClassifiedMessageInterface
             {
                 TestCase::assertSame($this->frame, $frame);
 
-                return new class($this->frame) implements ClassifiedMessageInterface {
+                return new class ($this->frame) implements ClassifiedMessageInterface {
                     public function __construct(private readonly Frame $frame) {}
 
                     public function frame(): Frame

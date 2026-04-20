@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -50,7 +52,7 @@ final class RuntimeSoakTest extends AsyncTestCase
         $this->queueAuthAndSubscriptionRestore($server);
         $server->closeActiveConnection();
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() === 2
+            fn(): bool => $server->connectionCount() === 2
                 && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
             0.6,
         );

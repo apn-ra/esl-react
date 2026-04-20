@@ -1,20 +1,24 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Events;
 
 use Apntalk\EslCore\Events\RawEvent;
+use Closure;
+use Throwable;
 
 final class UnknownEventHandler
 {
     /** @var list<callable(RawEvent): void> */
     private array $listeners = [];
-    private \Closure $errorHandler;
+    private Closure $errorHandler;
 
     public function __construct(?callable $errorHandler = null)
     {
         $this->errorHandler = $errorHandler !== null
-            ? \Closure::fromCallable($errorHandler)
-            : static function (\Throwable $e, RawEvent $event): void {
+            ? Closure::fromCallable($errorHandler)
+            : static function (Throwable $e, RawEvent $event): void {
                 fwrite(STDERR, sprintf(
                     "[esl-react] Unknown-event listener exception for %s: %s\n",
                     $event->eventName(),
@@ -38,10 +42,11 @@ final class UnknownEventHandler
         foreach ($this->listeners as $listener) {
             try {
                 $listener($event);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 try {
                     ($this->errorHandler)($e, $event);
-                } catch (\Throwable) {}
+                } catch (Throwable) {
+                }
             }
         }
     }

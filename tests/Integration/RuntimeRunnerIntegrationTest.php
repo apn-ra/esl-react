@@ -1,22 +1,25 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
-use Apntalk\EslCore\Inbound\InboundPipeline;
+use Apntalk\EslCore\Contracts\InboundPipelineInterface;
 use Apntalk\EslCore\Correlation\EventEnvelope;
 use Apntalk\EslCore\Events\BackgroundJobEvent;
+use Apntalk\EslCore\Inbound\DecodedInboundMessage;
+use Apntalk\EslCore\Inbound\InboundPipeline;
 use Apntalk\EslCore\Replies\ApiReply;
 use Apntalk\EslReact\AsyncEslRuntime;
 use Apntalk\EslReact\Bgapi\BgapiJobHandle;
 use Apntalk\EslReact\Config\CommandTimeoutConfig;
-use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Config\HeartbeatConfig;
 use Apntalk\EslReact\Config\RetryPolicy;
+use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Exceptions\AuthenticationException;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
 use Apntalk\EslReact\Exceptions\ConnectionException;
-use Apntalk\EslReact\Exceptions\ConnectionLostException;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
 use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
@@ -34,6 +37,7 @@ use React\Promise\Deferred;
 use React\Socket\ConnectionInterface;
 use React\Socket\Connector;
 use React\Socket\ConnectorInterface;
+use RuntimeException;
 
 final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 {
@@ -140,7 +144,9 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         });
         $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
             self::assertSame('auth ClueCon', $command);
-            $server->writeCommandReply($connection, '+OK accepted');
+            $this->loop->addTimer(0.12, function () use ($connection, $server): void {
+                $server->writeCommandReply($connection, '+OK accepted');
+            });
         });
 
         $handle = AsyncEslRuntime::runner()->run(
@@ -172,7 +178,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             function () use (&$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['runner'] === 'running'
+                    static fn(array $marker): bool => $marker['runner'] === 'running'
                         && $marker['connection'] === 'authenticated'
                         && $marker['session'] === 'active'
                         && $marker['live'] === true
@@ -188,7 +194,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             function () use (&$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                    static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                         && $marker['session'] === 'disconnected'
                         && $marker['reconnecting'] === true
                         && $marker['draining'] === false
@@ -216,7 +222,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             function () use (&$markers): bool {
                 return count(array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['runner'] === 'running'
+                    static fn(array $marker): bool => $marker['runner'] === 'running'
                         && $marker['connection'] === 'authenticated'
                         && $marker['session'] === 'active'
                         && $marker['live'] === true
@@ -231,7 +237,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             function () use (&$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'draining'
+                    static fn(array $marker): bool => $marker['connection'] === 'draining'
                         && $marker['draining'] === true
                         && $marker['reconnecting'] === false
                         && $marker['stopped'] === false
@@ -244,7 +250,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             function () use (&$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'closed'
+                    static fn(array $marker): bool => $marker['connection'] === 'closed'
                         && $marker['session'] === 'disconnected'
                         && $marker['draining'] === false
                         && $marker['stopped'] === true
@@ -269,7 +275,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             $server->writeApiResponse($connection, "+OK prepared-bootstrap\n");
         });
 
-        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+        $connector = new class ($this->loop, $server->address()) implements ConnectorInterface {
             /** @var list<string> */
             public array $requestedUris = [];
 
@@ -320,6 +326,107 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $reply = $this->await($handle->client()->api('status'));
         self::assertInstanceOf(ApiReply::class, $reply);
         self::assertSame("+OK prepared-bootstrap\n", $reply->body());
+
+        $server->close();
+    }
+
+    public function testRunnerUsesPreparedInboundPipelineForLiveIngress(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('api status', $command);
+            $server->writeApiResponse($connection, "+OK pipeline-live\n");
+        });
+
+        $pipeline = new class implements InboundPipelineInterface {
+            public int $resetCount = 0;
+            public int $pushCount = 0;
+            public int $drainCount = 0;
+            /** @var list<DecodedInboundMessage> */
+            public array $decoded = [];
+
+            private readonly InboundPipeline $inner;
+
+            public function __construct()
+            {
+                $this->inner = InboundPipeline::withDefaults();
+            }
+
+            public function push(string $bytes): void
+            {
+                $this->pushCount++;
+                $this->inner->push($bytes);
+            }
+
+            public function drain(): array
+            {
+                $this->drainCount++;
+                $decoded = $this->inner->drain();
+                $this->decoded = [...$this->decoded, ...$decoded];
+
+                return $decoded;
+            }
+
+            public function decode(string $bytes): array
+            {
+                $this->push($bytes);
+
+                return $this->drain();
+            }
+
+            public function finish(): void
+            {
+                $this->inner->finish();
+            }
+
+            public function reset(): void
+            {
+                $this->resetCount++;
+                $this->inner->reset();
+            }
+
+            public function bufferedByteCount(): int
+            {
+                return $this->inner->bufferedByteCount();
+            }
+        };
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeBootstrapInput(
+                endpoint: 'worker://node-a/prepared-pipeline',
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                ),
+                connector: new Connector([], $this->loop),
+                inboundPipeline: $pipeline,
+                sessionContext: new RuntimeSessionContext('runner-session-pipeline'),
+            ),
+            $this->loop,
+        );
+
+        $this->await($handle->startupPromise());
+        $reply = $this->await($handle->client()->api('status'));
+
+        self::assertInstanceOf(ApiReply::class, $reply);
+        self::assertSame("+OK pipeline-live\n", $reply->body());
+        self::assertGreaterThanOrEqual(2, $pipeline->resetCount);
+        self::assertGreaterThan(0, $pipeline->pushCount);
+        self::assertGreaterThan(0, $pipeline->drainCount);
+        self::assertNotEmpty($pipeline->decoded);
+        self::assertNotSame([], array_filter(
+            $pipeline->decoded,
+            static fn(DecodedInboundMessage $message): bool => $message->isServerAuthRequest(),
+        ));
+        self::assertNotSame([], array_filter(
+            $pipeline->decoded,
+            static fn(DecodedInboundMessage $message): bool => $message->isReply(),
+        ));
 
         $server->close();
     }
@@ -408,10 +515,10 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame(0, $feedback->queuedApiCommandCount());
 
         $bgapiHandle = $handle->client()->bgapi('status');
-        $bgapiHandle->promise()->then(static fn (): null => null, static fn (): null => null);
+        $bgapiHandle->promise()->then(static fn(): null => null, static fn(): null => null);
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->pendingBgapiJobCount() === 1,
+            fn(): bool => $handle->feedbackSnapshot()->pendingBgapiJobCount() === 1,
             0.2,
         );
 
@@ -504,7 +611,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->isReconnectRetryScheduled(),
+            fn(): bool => $handle->feedbackSnapshot()->isReconnectRetryScheduled(),
             0.3,
         );
 
@@ -538,7 +645,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertFalse($reconnecting->observedSubscriptionState()->isCurrentForActiveSession);
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->connectionState() === ConnectionState::Authenticated
+            fn(): bool => $handle->feedbackSnapshot()->connectionState() === ConnectionState::Authenticated
                 && $handle->feedbackSnapshot()->isReconnectRetryScheduled() === false,
             1.0,
         );
@@ -608,7 +715,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::WaitingToRetry,
+            fn(): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::WaitingToRetry,
             0.2,
         );
 
@@ -699,7 +806,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::WaitingToRetry,
+            fn(): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::WaitingToRetry,
             0.3,
         );
 
@@ -729,7 +836,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($waiting->terminalStoppedDurationSeconds);
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::AttemptingReconnect,
+            fn(): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::AttemptingReconnect,
             0.5,
         );
 
@@ -752,7 +859,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($attempting->terminalStoppedDurationSeconds);
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::RestoringSession,
+            fn(): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::RestoringSession,
             0.5,
         );
 
@@ -775,7 +882,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($restoring->terminalStoppedDurationSeconds);
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::Idle
+            fn(): bool => $handle->feedbackSnapshot()->reconnectState()->phase === RuntimeReconnectPhase::Idle
                 && $handle->feedbackSnapshot()->connectionState() === ConnectionState::Authenticated,
             1.0,
         );
@@ -814,7 +921,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             $server->writeCommandReply($connection, '+OK accepted');
         });
 
-        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+        $connector = new class ($this->loop, $server->address()) implements ConnectorInterface {
             /** @var list<string> */
             public array $requestedUris = [];
 
@@ -854,7 +961,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => count($connector->requestedUris) >= 2
+            fn(): bool => count($connector->requestedUris) >= 2
                 && $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated,
             0.5,
         );
@@ -863,6 +970,101 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             ['tls://pbx.example.test:7443', 'tls://pbx.example.test:7443'],
             array_slice($connector->requestedUris, 0, 2),
         );
+
+        $this->await($handle->client()->disconnect());
+        $server->close();
+    }
+
+    public function testRunnerFailsClosedWhenReconnectRestoreReceivesServerErrorReply(): void
+    {
+        $server = new ScriptedFakeEslServer($this->loop);
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $server->writeCommandReply($connection, '-ERR restore denied');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('auth ClueCon', $command);
+            $server->writeCommandReply($connection, '+OK accepted');
+        });
+        $server->queueCommandHandler(function ($connection, string $command) use ($server): void {
+            self::assertSame('event plain all', $command);
+            $server->writeCommandReply($connection, '+OK event listener enabled plain');
+        });
+
+        $handle = AsyncEslRuntime::runner()->run(
+            new PreparedRuntimeInput(
+                endpoint: sprintf('tcp://127.0.0.1:%d', $server->port()),
+                runtimeConfig: RuntimeConfig::create(
+                    host: '127.0.0.1',
+                    port: $server->port(),
+                    password: 'ClueCon',
+                    retryPolicy: RetryPolicy::withMaxAttempts(3, 0.05),
+                    heartbeat: HeartbeatConfig::disabled(),
+                ),
+            ),
+            $this->loop,
+        );
+
+        $markers = [];
+        $handle->onLifecycleChange(function (RuntimeLifecycleSnapshot $snapshot) use (&$markers): void {
+            $markers[] = $this->lifecycleMarker($snapshot);
+        });
+
+        $this->await($handle->startupPromise());
+        $this->await($handle->client()->subscriptions()->subscribeAll());
+
+        $initialStatus = $handle->statusSnapshot();
+        $initialSuccessfulConnectAt = $initialStatus->lastSuccessfulConnectAtMicros;
+        self::assertNotNull($initialSuccessfulConnectAt);
+
+        $server->closeActiveConnection();
+        $this->runLoopFor(1.0);
+
+        self::assertSame(
+            [
+                'auth ClueCon',
+                'event plain all',
+                'auth ClueCon',
+                'event plain all',
+                'auth ClueCon',
+                'event plain all',
+            ],
+            $server->receivedCommands(),
+        );
+        self::assertNotSame([], array_filter(
+            $markers,
+            static fn(array $marker): bool => $marker['runner'] === 'running'
+                && $marker['connection'] !== 'authenticated'
+                && $marker['live'] === false
+                && $marker['draining'] === false,
+        ));
+
+        $recovered = $handle->statusSnapshot();
+        self::assertSame(RuntimeStatusPhase::Active, $recovered->phase);
+        self::assertFalse($recovered->isRecoveryInProgress);
+        self::assertSame(ConnectionException::class, $recovered->lastFailureClass);
+        self::assertSame('Reconnect restore command failed for event plain all: restore denied', $recovered->lastFailureMessage);
+        self::assertSame(ConnectionException::class, $recovered->lastDisconnectReasonClass);
+        self::assertSame('Reconnect restore command failed for event plain all: restore denied', $recovered->lastDisconnectReasonMessage);
+        self::assertNotNull($recovered->lastSuccessfulConnectAtMicros);
+        self::assertGreaterThan($initialSuccessfulConnectAt ?? 0.0, $recovered->lastSuccessfulConnectAtMicros ?? 0.0);
+        self::assertSame(ConnectionState::Authenticated, $handle->feedbackSnapshot()->connectionState());
+        self::assertSame(SessionState::Active, $handle->feedbackSnapshot()->sessionState());
+        self::assertTrue($handle->feedbackSnapshot()->isLive());
+        self::assertTrue($handle->feedbackSnapshot()->observedSubscriptionState()->subscribeAll);
+        self::assertTrue($handle->feedbackSnapshot()->observedSubscriptionState()->isCurrentForActiveSession);
 
         $this->await($handle->client()->disconnect());
         $server->close();
@@ -1096,7 +1298,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $handle->lifecycleSnapshot()->isReconnecting(),
+            fn(): bool => $handle->lifecycleSnapshot()->isReconnecting(),
             0.2,
         );
 
@@ -1118,7 +1320,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertNull($reconnectingStatus->lastDisconnectReasonClass);
 
         $this->waitUntil(
-            fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated,
+            fn(): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated,
             0.5,
         );
 
@@ -1179,7 +1381,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             $server->writeCommandReply($connection, '+OK accepted');
         });
 
-        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+        $connector = new class ($this->loop, $server->address()) implements ConnectorInterface {
             public ?ConnectionInterface $connection = null;
 
             public function __construct(
@@ -1219,11 +1421,11 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $this->await($handle->startupPromise());
         self::assertInstanceOf(ConnectionInterface::class, $connector->connection);
 
-        $connector->connection->emit('error', [new \RuntimeException('forced transport error')]);
+        $connector->connection->emit('error', [new RuntimeException('forced transport error')]);
         $connector->connection->close();
 
         $this->waitUntil(
-            fn (): bool => $handle->statusSnapshot()->phase === RuntimeStatusPhase::Reconnecting,
+            fn(): bool => $handle->statusSnapshot()->phase === RuntimeStatusPhase::Reconnecting,
             0.2,
         );
 
@@ -1231,14 +1433,14 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame(RuntimeStatusPhase::Reconnecting, $reconnecting->phase);
         self::assertTrue($reconnecting->isRuntimeActive);
         self::assertTrue($reconnecting->isRecoveryInProgress);
-        self::assertSame(\RuntimeException::class, $reconnecting->lastFailureClass);
+        self::assertSame(RuntimeException::class, $reconnecting->lastFailureClass);
         self::assertSame('forced transport error', $reconnecting->lastFailureMessage);
-        self::assertSame(\RuntimeException::class, $reconnecting->lastDisconnectReasonClass);
+        self::assertSame(RuntimeException::class, $reconnecting->lastDisconnectReasonClass);
         self::assertSame('forced transport error', $reconnecting->lastDisconnectReasonMessage);
         self::assertFalse($reconnecting->health->isDraining);
 
         $this->waitUntil(
-            fn (): bool => $handle->statusSnapshot()->phase === RuntimeStatusPhase::Active
+            fn(): bool => $handle->statusSnapshot()->phase === RuntimeStatusPhase::Active
                 && $server->connectionCount() === 2,
             0.5,
         );
@@ -1246,7 +1448,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $recovered = $handle->statusSnapshot();
         self::assertSame(RuntimeStatusPhase::Active, $recovered->phase);
         self::assertFalse($recovered->isRecoveryInProgress);
-        self::assertSame(\RuntimeException::class, $recovered->lastDisconnectReasonClass);
+        self::assertSame(RuntimeException::class, $recovered->lastDisconnectReasonClass);
         self::assertSame('forced transport error', $recovered->lastDisconnectReasonMessage);
 
         $this->await($handle->client()->disconnect());
@@ -1261,7 +1463,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             $server->writeCommandReply($connection, '+OK accepted');
         });
 
-        $connector = new class($this->loop, $server->address()) implements ConnectorInterface {
+        $connector = new class ($this->loop, $server->address()) implements ConnectorInterface {
             private int $attempts = 0;
 
             public function __construct(
@@ -1277,7 +1479,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     return (new Connector([], $this->loop))->connect($this->targetUri);
                 }
 
-                return \React\Promise\reject(new \RuntimeException('forced reconnect attempt failure'));
+                return \React\Promise\reject(new RuntimeException('forced reconnect attempt failure'));
             }
         };
 
@@ -1304,7 +1506,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         $server->close();
 
         $this->waitUntil(
-            fn (): bool => $handle->feedbackSnapshot()->reconnectState()->isTerminallyStopped,
+            fn(): bool => $handle->feedbackSnapshot()->reconnectState()->isTerminallyStopped,
             0.5,
         );
 
@@ -1408,7 +1610,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame('', $job->eslArgs());
 
         $this->waitUntil(
-            fn (): bool => $job->jobUuid() === 'runner-bgapi-job-1'
+            fn(): bool => $job->jobUuid() === 'runner-bgapi-job-1'
                 && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
             0.2,
         );
@@ -1441,7 +1643,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['reconnecting'] === true
+            static fn(array $marker): bool => $marker['reconnecting'] === true
                 || $marker['connection'] === 'reconnecting'
                 || $marker['draining'] === true
                 || $marker['connection'] === 'draining'
@@ -1501,7 +1703,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         $job = $handle->client()->bgapi('status');
         $this->waitUntil(
-            fn (): bool => $job->jobUuid() === 'runner-bgapi-reconnect-job'
+            fn(): bool => $job->jobUuid() === 'runner-bgapi-reconnect-job'
                 && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
             0.2,
         );
@@ -1526,7 +1728,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     && $snapshot->health?->pendingBgapiJobCount === 1
                     && array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                        static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                             && $marker['session'] === 'disconnected'
                             && $marker['reconnecting'] === true
                             && $marker['draining'] === false
@@ -1557,7 +1759,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         }
 
         $this->waitUntil(
-            fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+            fn(): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
                 && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
                 && $handle->lifecycleSnapshot()->isLive()
                 && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1
@@ -1593,7 +1795,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['draining'] === true
+            static fn(array $marker): bool => $marker['draining'] === true
                 || $marker['connection'] === 'draining'
         ));
 
@@ -1647,7 +1849,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         $job = $handle->client()->bgapi('status');
         $this->waitUntil(
-            fn (): bool => $job->jobUuid() === 'runner-bgapi-degraded-job'
+            fn(): bool => $job->jobUuid() === 'runner-bgapi-degraded-job'
                 && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
             0.2,
         );
@@ -1662,7 +1864,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     && $snapshot->health?->pendingBgapiJobCount === 1
                     && array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === false
                             && $marker['reconnecting'] === false
@@ -1683,7 +1885,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
         self::assertSame(1, $degraded->health?->pendingBgapiJobCount);
 
         $this->waitUntil(
-            fn (): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
+            fn(): bool => $handle->lifecycleSnapshot()->connectionState() === ConnectionState::Authenticated
                 && $handle->lifecycleSnapshot()->sessionState() === SessionState::Active
                 && $handle->lifecycleSnapshot()->isLive()
                 && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
@@ -1708,7 +1910,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['reconnecting'] === true
+            static fn(array $marker): bool => $marker['reconnecting'] === true
                 || $marker['connection'] === 'reconnecting'
                 || $marker['draining'] === true
                 || $marker['connection'] === 'draining'
@@ -1760,7 +1962,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     && $handle->lifecycleSnapshot()->isLive() === false
                     && array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === false
                             && $marker['reconnecting'] === false
@@ -1788,7 +1990,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     && $handle->lifecycleSnapshot()->isLive()
                     && count(array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === true
                             && $marker['reconnecting'] === false
@@ -1810,7 +2012,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['reconnecting'] === true
+            static fn(array $marker): bool => $marker['reconnecting'] === true
                 || $marker['connection'] === 'reconnecting'
                 || $marker['draining'] === true
                 || $marker['connection'] === 'draining'
@@ -1868,7 +2070,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     && $handle->lifecycleSnapshot()->isLive() === false
                     && array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === false
                             && $marker['reconnecting'] === false
@@ -1883,7 +2085,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
             function () use ($handle, &$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                    static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                         && $marker['session'] === 'disconnected'
                         && $marker['live'] === false
                         && $marker['reconnecting'] === true
@@ -1910,7 +2112,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
                     && $handle->lifecycleSnapshot()->isLive()
                     && count(array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === true
                             && $marker['reconnecting'] === false
@@ -1932,7 +2134,7 @@ final class RuntimeRunnerIntegrationTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['draining'] === true
+            static fn(array $marker): bool => $marker['draining'] === true
                 || $marker['connection'] === 'draining'
         ));
 

@@ -1,16 +1,22 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\FakeServer;
 
+use function assert;
+
+use Closure;
 use React\EventLoop\LoopInterface;
 use React\Socket\ConnectionInterface;
 use React\Socket\SocketServer;
+use RuntimeException;
 
 final class ScriptedFakeEslServer
 {
     private readonly SocketServer $server;
-    /** @var \Closure(ConnectionInterface): void|null */
-    private ?\Closure $onConnection = null;
+    /** @var Closure(ConnectionInterface): void|null */
+    private ?Closure $onConnection = null;
     private ?ConnectionInterface $activeConnection = null;
     /** @var list<ConnectionInterface> */
     private array $connections = [];
@@ -28,13 +34,13 @@ final class ScriptedFakeEslServer
         bool $autoAuthRequest = true,
         ?callable $onConnection = null,
     ) {
-        $this->onConnection = $onConnection !== null ? \Closure::fromCallable($onConnection) : null;
+        $this->onConnection = $onConnection !== null ? Closure::fromCallable($onConnection) : null;
         $this->server = new SocketServer('127.0.0.1:0', [], $this->loop);
         $this->server->on('connection', function (ConnectionInterface $connection) use ($autoAuthRequest): void {
             $this->activeConnection = $connection;
             $this->connections[] = $connection;
             $connectionIndex = array_key_last($this->connections);
-            \assert(is_int($connectionIndex));
+            assert(is_int($connectionIndex));
             $this->receivedCommandsByConnection[$connectionIndex] = [];
             if ($autoAuthRequest) {
                 $this->writeFrame($connection, "Content-Type: auth/request\n\n");
@@ -78,7 +84,7 @@ final class ScriptedFakeEslServer
     {
         $address = $this->server->getAddress();
         if (!is_string($address)) {
-            throw new \RuntimeException('Fake server has no listening address');
+            throw new RuntimeException('Fake server has no listening address');
         }
 
         return $address;
@@ -88,7 +94,7 @@ final class ScriptedFakeEslServer
     {
         $port = parse_url($this->address(), PHP_URL_PORT);
         if (!is_int($port)) {
-            throw new \RuntimeException('Unable to determine fake server port');
+            throw new RuntimeException('Unable to determine fake server port');
         }
 
         return $port;
@@ -221,7 +227,7 @@ final class ScriptedFakeEslServer
     private function requireActiveConnection(): ConnectionInterface
     {
         if ($this->activeConnection === null) {
-            throw new \RuntimeException('No active fake-server connection available');
+            throw new RuntimeException('No active fake-server connection available');
         }
 
         return $this->activeConnection;

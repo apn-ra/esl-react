@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -11,16 +13,17 @@ use Apntalk\EslReact\Config\HeartbeatConfig;
 use Apntalk\EslReact\Config\RetryPolicy;
 use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Connection\ConnectionState;
-use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
-use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
 use Apntalk\EslReact\Runner\RuntimeLifecycleSnapshot;
+use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
 use Apntalk\EslReact\Runner\RuntimeRunnerState;
 use Apntalk\EslReact\Runtime\RuntimeClient;
 use Apntalk\EslReact\Session\SessionState;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
 use React\Promise\PromiseInterface;
 use React\Socket\ConnectionInterface;
+use ReflectionObject;
+use Throwable;
 
 final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends AsyncTestCase
 {
@@ -115,7 +118,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
         self::assertSame($bgapiArgs, $job->eslArgs());
 
         $this->waitUntil(
-            fn (): bool => $job->jobUuid() !== ''
+            fn(): bool => $job->jobUuid() !== ''
                 && $handle->lifecycleSnapshot()->health?->pendingBgapiJobCount === 1,
             6.0,
         );
@@ -137,7 +140,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
             $this->waitUntil(function () use (&$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => in_array($marker['connection'], ['reconnecting', 'disconnected'], true)
+                    static fn(array $marker): bool => in_array($marker['connection'], ['reconnecting', 'disconnected'], true)
                         && $marker['session'] === 'disconnected'
                         && $marker['reconnecting'] === true
                         && $marker['draining'] === false
@@ -147,7 +150,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
 
             self::assertNotEmpty(array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                     && $marker['session'] === 'disconnected'
                     && $marker['reconnecting'] === true
                     && $marker['draining'] === false
@@ -155,7 +158,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
             ));
             self::assertSame([], array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['connection'] === 'draining'
+                static fn(array $marker): bool => $marker['connection'] === 'draining'
                     || $marker['draining'] === true
             ), 'Unexpected reconnect while a pending bgapi job survives should not be reported as drain.');
 
@@ -215,7 +218,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
 
             self::assertGreaterThanOrEqual(2, count(array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['runner'] === 'running'
+                static fn(array $marker): bool => $marker['runner'] === 'running'
                     && $marker['connection'] === 'authenticated'
                     && $marker['session'] === 'active'
                     && $marker['live'] === true
@@ -317,7 +320,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
 
         try {
             $this->await($controlClient->disconnect(), 2.0);
-        } catch (\Throwable) {
+        } catch (Throwable) {
             // The listener reload may close this temporary control session.
         }
 
@@ -327,7 +330,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
     private function forceCloseRunnerTransport(): void
     {
         $runtimeClient = $this->runtimeClient();
-        $reflection = new \ReflectionObject($runtimeClient);
+        $reflection = new ReflectionObject($runtimeClient);
         $property = $reflection->getProperty('connection');
         $property->setAccessible(true);
         $connection = $property->getValue($runtimeClient);
@@ -361,7 +364,7 @@ final class LiveRuntimeRunnerPendingBgapiReconnectCompatibilityTest extends Asyn
     private function connectAndRunExternalApi(\Apntalk\EslReact\Contracts\AsyncEslClientInterface $client, string $command): PromiseInterface
     {
         return $client->connect()->then(
-            fn (): PromiseInterface => $client->api($command),
+            fn(): PromiseInterface => $client->api($command),
         );
     }
 

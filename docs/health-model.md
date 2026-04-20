@@ -224,7 +224,7 @@ The message of the most recent exception, or `null`. Accompanies `lastErrorClass
 
 ### snapshotAtMicros
 
-Type: `int`
+Type: `float`
 
 Unix timestamp in microseconds when this snapshot was taken. Use this to determine how fresh the snapshot is if it is being cached or relayed across a system boundary.
 
@@ -232,7 +232,7 @@ Unix timestamp in microseconds when this snapshot was taken. Use this to determi
 
 ### lastHeartbeatAtMicros
 
-Type: `?int`
+Type: `?float`
 
 Unix timestamp in microseconds when the most recent inbound activity was recorded by the heartbeat monitor, or `null` if no inbound frame has been seen since the current runtime started.
 

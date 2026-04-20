@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Subscription;
 
@@ -6,12 +8,18 @@ use Apntalk\EslCore\Commands\EventSubscriptionCommand;
 use Apntalk\EslCore\Commands\FilterCommand;
 use Apntalk\EslCore\Commands\NoEventsCommand;
 use Apntalk\EslCore\Contracts\CommandInterface;
+use Apntalk\EslCore\Contracts\ReplyInterface;
+use Apntalk\EslCore\Replies\ErrorReply;
 use Apntalk\EslReact\Contracts\SubscriptionManagerInterface;
 use Apntalk\EslReact\Exceptions\ConnectionException;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
+use Closure;
 use React\Promise\PromiseInterface;
+
 use function React\Promise\reject;
 use function React\Promise\resolve;
+
+use Throwable;
 
 final class SubscriptionManager implements SubscriptionManagerInterface
 {
@@ -22,15 +30,15 @@ final class SubscriptionManager implements SubscriptionManagerInterface
     private bool $observedCurrentForActiveSession = false;
 
     /**
-     * @param \Closure(CommandInterface, string, float): PromiseInterface<\Apntalk\EslCore\Contracts\ReplyInterface> $dispatchCommand
+     * @param Closure(CommandInterface, string, float): PromiseInterface<ReplyInterface> $dispatchCommand
      */
     public function __construct(
         private readonly ActiveSubscriptionSet $activeSubscriptions,
         private readonly FilterManager $filters,
-        private readonly \Closure $dispatchCommand,
+        private readonly Closure $dispatchCommand,
         private readonly float $timeoutSeconds,
-        /** @var \Closure(): void */
-        private readonly \Closure $assertCanMutateLiveSession,
+        /** @var Closure(): void */
+        private readonly Closure $assertCanMutateLiveSession,
         private readonly ?RuntimeReplayCapture $replayCapture = null,
     ) {
         $this->observedSubscriptions = new ActiveSubscriptionSet();
@@ -80,7 +88,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             EventSubscriptionCommand::forNames($desired),
             'event plain ' . implode(' ', $desired),
             $this->timeoutSeconds,
-        )->then(function () use ($desired): void {
+        )->then(function (ReplyInterface $reply) use ($desired): void {
+            $this->assertLiveMutationReplyAccepted($reply, 'event plain ' . implode(' ', $desired));
             $this->activeSubscriptions->replace($desired);
             $this->observedSubscriptions->replace($desired);
             $this->observedCurrentForActiveSession = true;
@@ -114,7 +123,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             EventSubscriptionCommand::all(),
             'event plain all',
             $this->timeoutSeconds,
-        )->then(function (): void {
+        )->then(function (ReplyInterface $reply): void {
+            $this->assertLiveMutationReplyAccepted($reply, 'event plain all');
             $this->activeSubscriptions->subscribeAll();
             $this->observedSubscriptions->subscribeAll();
             $this->observedCurrentForActiveSession = true;
@@ -140,7 +150,7 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
         $desired = array_values(array_filter(
             $this->activeSubscriptions->eventNames(),
-            static fn (string $name): bool => !in_array($name, $normalized, true),
+            static fn(string $name): bool => !in_array($name, $normalized, true),
         ));
 
         if ($desired === $this->activeSubscriptions->eventNames()) {
@@ -171,7 +181,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             $command,
             $description,
             $this->timeoutSeconds,
-        )->then(function () use ($desired): void {
+        )->then(function (ReplyInterface $reply) use ($desired, $description): void {
+            $this->assertLiveMutationReplyAccepted($reply, $description);
             if ($desired === []) {
                 $this->activeSubscriptions->reset();
                 $this->observedSubscriptions->reset();
@@ -210,7 +221,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             FilterCommand::add($headerName, $headerValue),
             sprintf('filter %s %s', $headerName, $headerValue),
             $this->timeoutSeconds,
-        )->then(function () use ($headerName, $headerValue): void {
+        )->then(function (ReplyInterface $reply) use ($headerName, $headerValue): void {
+            $this->assertLiveMutationReplyAccepted($reply, sprintf('filter %s %s', $headerName, $headerValue));
             $this->filters->addFilter($headerName, $headerValue);
             $this->observedFilters->addFilter($headerName, $headerValue);
             $this->observedCurrentForActiveSession = true;
@@ -230,7 +242,7 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         $before = $this->filterState();
         $after = array_values(array_filter(
             $before,
-            static fn (array $filter): bool => !(
+            static fn(array $filter): bool => !(
                 $filter['headerName'] === $headerName
                 && $filter['headerValue'] === $headerValue
             ),
@@ -248,7 +260,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
             FilterCommand::delete($headerName, $headerValue),
             sprintf('filter delete %s %s', $headerName, $headerValue),
             $this->timeoutSeconds,
-        )->then(function () use ($headerName, $headerValue): void {
+        )->then(function (ReplyInterface $reply) use ($headerName, $headerValue): void {
+            $this->assertLiveMutationReplyAccepted($reply, sprintf('filter delete %s %s', $headerName, $headerValue));
             $this->filters->removeFilter($headerName, $headerValue);
             $this->observedFilters->removeFilter($headerName, $headerValue);
             $this->observedCurrentForActiveSession = true;
@@ -325,7 +338,8 @@ final class SubscriptionManager implements SubscriptionManagerInterface
                     EventSubscriptionCommand::all(),
                     'event plain all',
                     $this->timeoutSeconds,
-                )->then(function (): null {
+                )->then(function (ReplyInterface $reply): null {
+                    $this->assertRestoreReplyAccepted($reply, 'event plain all');
                     $this->observedSubscriptions->subscribeAll();
                     return null;
                 });
@@ -333,11 +347,14 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         } elseif ($this->activeSubscriptions->eventNames() !== []) {
             $desired = $this->activeSubscriptions->eventNames();
             $promise = $promise->then(function () use ($desired): PromiseInterface {
+                $description = 'event plain ' . implode(' ', $desired);
+
                 return ($this->dispatchCommand)(
                     EventSubscriptionCommand::forNames($desired),
-                    'event plain ' . implode(' ', $desired),
+                    $description,
                     $this->timeoutSeconds,
-                )->then(function () use ($desired): null {
+                )->then(function (ReplyInterface $reply) use ($desired, $description): null {
+                    $this->assertRestoreReplyAccepted($reply, $description);
                     $this->observedSubscriptions->replace($desired);
                     return null;
                 });
@@ -346,11 +363,14 @@ final class SubscriptionManager implements SubscriptionManagerInterface
 
         foreach ($this->filters->all() as $filter) {
             $promise = $promise->then(function () use ($filter): PromiseInterface {
+                $description = sprintf('filter %s %s', $filter['headerName'], $filter['headerValue']);
+
                 return ($this->dispatchCommand)(
                     FilterCommand::add($filter['headerName'], $filter['headerValue']),
-                    sprintf('filter %s %s', $filter['headerName'], $filter['headerValue']),
+                    $description,
                     $this->timeoutSeconds,
-                )->then(function () use ($filter): null {
+                )->then(function (ReplyInterface $reply) use ($filter, $description): null {
+                    $this->assertRestoreReplyAccepted($reply, $description);
                     $this->observedFilters->addFilter($filter['headerName'], $filter['headerValue']);
                     return null;
                 });
@@ -402,6 +422,28 @@ final class SubscriptionManager implements SubscriptionManagerInterface
         ($this->assertCanMutateLiveSession)();
     }
 
+    private function assertLiveMutationReplyAccepted(ReplyInterface $reply, string $description): void
+    {
+        if ($reply instanceof ErrorReply) {
+            throw new ConnectionException(sprintf(
+                'Live session mutation command failed for %s: %s',
+                $description,
+                $reply->reason(),
+            ));
+        }
+    }
+
+    private function assertRestoreReplyAccepted(ReplyInterface $reply, string $description): void
+    {
+        if ($reply instanceof ErrorReply) {
+            throw new ConnectionException(sprintf(
+                'Reconnect restore command failed for %s: %s',
+                $description,
+                $reply->reason(),
+            ));
+        }
+    }
+
     /**
      * @return PromiseInterface<void>|null
      */
@@ -409,7 +451,7 @@ final class SubscriptionManager implements SubscriptionManagerInterface
     {
         try {
             $this->assertCanMutateLiveSession();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             /** @var PromiseInterface<void> $promise */
             $promise = reject($e);
 

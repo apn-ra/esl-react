@@ -1,8 +1,12 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Events;
 
 use Apntalk\EslCore\Contracts\EventInterface;
+use Closure;
+use Throwable;
 
 final class TypedEventEmitter
 {
@@ -10,13 +14,13 @@ final class TypedEventEmitter
     private array $listeners = [];
     /** @var list<callable(EventInterface): void> */
     private array $anyListeners = [];
-    private \Closure $errorHandler;
+    private Closure $errorHandler;
 
     public function __construct(?callable $errorHandler = null)
     {
         $this->errorHandler = $errorHandler !== null
-            ? \Closure::fromCallable($errorHandler)
-            : static function (\Throwable $e, EventInterface $event): void {
+            ? Closure::fromCallable($errorHandler)
+            : static function (Throwable $e, EventInterface $event): void {
                 // Default: write to stderr without crashing
                 fwrite(STDERR, sprintf(
                     "[esl-react] Listener exception for event %s: %s\n",
@@ -43,7 +47,7 @@ final class TypedEventEmitter
         }
         $this->listeners[$eventName] = array_values(array_filter(
             $this->listeners[$eventName],
-            static fn ($l) => $l !== $listener,
+            static fn($l) => $l !== $listener,
         ));
         if (empty($this->listeners[$eventName])) {
             unset($this->listeners[$eventName]);
@@ -84,10 +88,11 @@ final class TypedEventEmitter
     {
         try {
             $listener($event);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             try {
                 ($this->errorHandler)($e, $event);
-            } catch (\Throwable) {}
+            } catch (Throwable) {
+            }
         }
     }
 }

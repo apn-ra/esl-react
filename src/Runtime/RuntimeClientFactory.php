@@ -1,14 +1,16 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runtime;
 
+use Apntalk\EslCore\Contracts\CommandInterface;
+use Apntalk\EslCore\Contracts\InboundPipelineInterface;
+use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslCore\Correlation\ConnectionSessionId;
 use Apntalk\EslCore\Correlation\CorrelationContext;
-use Apntalk\EslCore\Contracts\CommandInterface;
-use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslCore\Events\EventFactory;
-use Apntalk\EslCore\Internal\Classification\InboundMessageClassifier;
-use Apntalk\EslCore\Parsing\FrameParser;
+use Apntalk\EslCore\Inbound\InboundPipeline;
 use Apntalk\EslCore\Serialization\CommandSerializer;
 use Apntalk\EslReact\Bgapi\BgapiDispatcher;
 use Apntalk\EslReact\Bgapi\BgapiJobTracker;
@@ -19,10 +21,8 @@ use Apntalk\EslReact\Events\EventStream;
 use Apntalk\EslReact\Health\RuntimeHealthReporter;
 use Apntalk\EslReact\Heartbeat\HeartbeatMonitor;
 use Apntalk\EslReact\Heartbeat\IdleTimer;
-use Apntalk\EslReact\Protocol\EnvelopePump;
-use Apntalk\EslReact\Protocol\FrameReader;
 use Apntalk\EslReact\Protocol\FrameWriter;
-use Apntalk\EslReact\Protocol\InboundMessageRouter;
+use Apntalk\EslReact\Protocol\InboundMessagePump;
 use Apntalk\EslReact\Protocol\OutboundMessageDispatcher;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
 use Apntalk\EslReact\Runner\RuntimeSessionContext;
@@ -30,9 +30,11 @@ use Apntalk\EslReact\Subscription\ActiveSubscriptionSet;
 use Apntalk\EslReact\Subscription\FilterManager;
 use Apntalk\EslReact\Subscription\SubscriptionManager;
 use Apntalk\EslReact\Supervisor\ReconnectScheduler;
+use LogicException;
 use React\EventLoop\LoopInterface;
 use React\Socket\Connector;
 use React\Socket\ConnectorInterface;
+use Throwable;
 
 /**
  * @internal Runtime graph factory; not part of the stable public API.
@@ -47,6 +49,7 @@ final class RuntimeClientFactory
         ?RuntimeSessionContext $sessionContext = null,
         ?bool $replayCaptureEnabled = null,
         ?array $replayCaptureSinks = null,
+        ?InboundPipelineInterface $inboundPipeline = null,
     ): AsyncEslClientInterface {
         /** @var RuntimeClient|null $client */
         $client = null;
@@ -87,7 +90,7 @@ final class RuntimeClientFactory
             },
             loop: $loop,
             maxQueued: $config->backpressure->maxInflightCommands,
-            onReplyCorrelationCompromised: static function (\Throwable $reason) use (&$client): void {
+            onReplyCorrelationCompromised: static function (Throwable $reason) use (&$client): void {
                 if (!$client instanceof RuntimeClient) {
                     return;
                 }
@@ -128,7 +131,7 @@ final class RuntimeClientFactory
             timeoutSeconds: $config->commandTimeout->subscriptionTimeoutSeconds,
             assertCanMutateLiveSession: static function () use (&$client): void {
                 if (!$client instanceof RuntimeClient) {
-                    throw new \LogicException('Runtime client not initialized');
+                    throw new LogicException('Runtime client not initialized');
                 }
 
                 $client->assertCanAcceptSessionMutation();
@@ -141,8 +144,7 @@ final class RuntimeClientFactory
             loop: $loop,
             connector: $connector ?? new Connector([], $loop),
             connectionUri: $connectionUri ?? $config->connectionUri(),
-            envelopePump: new EnvelopePump(new FrameReader(new FrameParser())),
-            router: new InboundMessageRouter(new InboundMessageClassifier()),
+            inboundPump: new InboundMessagePump($inboundPipeline ?? InboundPipeline::withDefaults()),
             outbound: $outbound,
             commands: $commandBus,
             bgapi: $bgapi,
@@ -155,17 +157,17 @@ final class RuntimeClientFactory
         );
 
         $health = new RuntimeHealthReporter(
-            connectionStateProvider: static fn () => $client->connectionState(),
-            sessionStateProvider: static fn () => $client->sessionState(),
-            livenessProvider: static fn () => $client->livenessState(),
-            inflightCountProvider: static fn () => $client->inflightCommandCount(),
-            bgapiPendingCountProvider: static fn () => $client->pendingBgapiCount(),
-            totalInflightCountProvider: static fn () => $client->totalInflightWorkCount(),
-            overloadedProvider: static fn () => $client->isOverloaded(),
-            subscriptionsProvider: static fn () => $subscriptions->activeEventNames(),
-            reconnectAttemptsProvider: static fn () => $client->reconnectAttempts(),
-            drainingProvider: static fn () => $client->isDraining(),
-            lastHeartbeatProvider: static fn () => $heartbeat->lastHeartbeatAtMicros(),
+            connectionStateProvider: static fn() => $client->connectionState(),
+            sessionStateProvider: static fn() => $client->sessionState(),
+            livenessProvider: static fn() => $client->livenessState(),
+            inflightCountProvider: static fn() => $client->inflightCommandCount(),
+            bgapiPendingCountProvider: static fn() => $client->pendingBgapiCount(),
+            totalInflightCountProvider: static fn() => $client->totalInflightWorkCount(),
+            overloadedProvider: static fn() => $client->isOverloaded(),
+            subscriptionsProvider: static fn() => $subscriptions->activeEventNames(),
+            reconnectAttemptsProvider: static fn() => $client->reconnectAttempts(),
+            drainingProvider: static fn() => $client->isDraining(),
+            lastHeartbeatProvider: static fn() => $heartbeat->lastHeartbeatAtMicros(),
         );
 
         $client->attachHealthReporter($health);

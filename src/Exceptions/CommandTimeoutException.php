@@ -1,11 +1,18 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Exceptions;
-class CommandTimeoutException extends EslRuntimeException {
+
+use Throwable;
+
+class CommandTimeoutException extends EslRuntimeException
+{
     public function __construct(
         private readonly string $eslCommand,
         private readonly float $timeoutSeconds,
         int $code = 0,
-        ?\Throwable $previous = null,
+        ?Throwable $previous = null,
     ) {
         parent::__construct(
             sprintf('ESL command "%s" timed out after %.2f seconds', $eslCommand, $timeoutSeconds),
@@ -13,6 +20,12 @@ class CommandTimeoutException extends EslRuntimeException {
             $previous,
         );
     }
-    public function eslCommand(): string { return $this->eslCommand; }
-    public function timeoutSeconds(): float { return $this->timeoutSeconds; }
+    public function eslCommand(): string
+    {
+        return $this->eslCommand;
+    }
+    public function timeoutSeconds(): float
+    {
+        return $this->timeoutSeconds;
+    }
 }

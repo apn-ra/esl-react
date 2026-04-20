@@ -1,8 +1,13 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Contracts;
+
 use React\Promise\PromiseInterface;
 
-interface SubscriptionManagerInterface {
+interface SubscriptionManagerInterface
+{
     /**
      * Subscribe to one or more event names.
      *

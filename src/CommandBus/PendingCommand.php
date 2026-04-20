@@ -1,10 +1,13 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\CommandBus;
 
 use React\EventLoop\TimerInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+use Throwable;
 
 final class PendingCommand
 {
@@ -52,7 +55,7 @@ final class PendingCommand
         $this->deferred->resolve($value);
     }
 
-    public function reject(\Throwable $reason): void
+    public function reject(Throwable $reason): void
     {
         if ($this->settled) {
             return;

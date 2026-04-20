@@ -1,10 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Bgapi;
 
+use InvalidArgumentException;
 use React\EventLoop\TimerInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+use Throwable;
 
 final class PendingBgapiJob
 {
@@ -30,7 +34,7 @@ final class PendingBgapiJob
     public function assignJobUuid(string $jobUuid): void
     {
         if ($jobUuid === '') {
-            throw new \InvalidArgumentException('jobUuid must not be empty');
+            throw new InvalidArgumentException('jobUuid must not be empty');
         }
 
         $this->jobUuid = $jobUuid;
@@ -73,7 +77,7 @@ final class PendingBgapiJob
         $this->deferred->resolve($value);
     }
 
-    public function reject(\Throwable $reason): void
+    public function reject(Throwable $reason): void
     {
         if ($this->settled) {
             return;

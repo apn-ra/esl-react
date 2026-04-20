@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -62,7 +64,7 @@ final class ProtocolHardeningTest extends AsyncTestCase
         );
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.2,
         );
 
@@ -83,7 +85,7 @@ final class ProtocolHardeningTest extends AsyncTestCase
         $server->writeRawFrame($server->activeConnection(), "Content-Type auth/request\n\n");
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.2,
         );
 

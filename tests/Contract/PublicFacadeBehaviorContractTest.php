@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Contract;
 
@@ -114,7 +116,7 @@ final class PublicFacadeBehaviorContractTest extends AsyncTestCase
         self::assertSame('', $handle->jobUuid());
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() === 'job-contract-1',
+            fn(): bool => $handle->jobUuid() === 'job-contract-1',
             0.2,
         );
 

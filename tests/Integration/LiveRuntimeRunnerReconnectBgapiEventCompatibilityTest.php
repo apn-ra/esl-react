@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -178,7 +180,7 @@ final class LiveRuntimeRunnerReconnectBgapiEventCompatibilityTest extends AsyncT
 
             self::assertNotEmpty(array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                     && $marker['session'] === 'disconnected'
                     && $marker['reconnecting'] === true
                     && $marker['draining'] === false
@@ -186,7 +188,7 @@ final class LiveRuntimeRunnerReconnectBgapiEventCompatibilityTest extends AsyncT
             ));
             self::assertSame([], array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['connection'] === 'draining'
+                static fn(array $marker): bool => $marker['connection'] === 'draining'
                     || $marker['draining'] === true
             ), 'Unexpected transport-loss reconnect with event/bgapi subscriptions should not be reported as drain.');
 
@@ -227,7 +229,7 @@ final class LiveRuntimeRunnerReconnectBgapiEventCompatibilityTest extends AsyncT
             self::assertSame($bgapiCommand, $job->eslCommand());
             self::assertSame($bgapiArgs, $job->eslArgs());
 
-            $this->waitUntil(fn (): bool => $job->jobUuid() !== '', 6.0);
+            $this->waitUntil(fn(): bool => $job->jobUuid() !== '', 6.0);
             self::assertNotSame('', $job->jobUuid(), 'Expected a non-empty Job-UUID after post-reconnect bgapi ack.');
             $this->assertLiveLifecycle($handle->lifecycleSnapshot());
 
@@ -241,7 +243,7 @@ final class LiveRuntimeRunnerReconnectBgapiEventCompatibilityTest extends AsyncT
             self::assertSame(0, $afterActivity->health?->pendingBgapiJobCount);
             self::assertGreaterThanOrEqual(2, count(array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['runner'] === 'running'
+                static fn(array $marker): bool => $marker['runner'] === 'running'
                     && $marker['connection'] === 'authenticated'
                     && $marker['session'] === 'active'
                     && $marker['live'] === true

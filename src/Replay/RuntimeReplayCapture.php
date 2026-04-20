@@ -1,17 +1,21 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Replay;
 
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
+use Apntalk\EslCore\Contracts\ReplyInterface;
 use Apntalk\EslCore\Correlation\CorrelationContext;
 use Apntalk\EslCore\Correlation\EventEnvelope;
 use Apntalk\EslCore\Correlation\ReplyEnvelope;
-use Apntalk\EslCore\Contracts\ReplyInterface;
 use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslCore\Replay\ReplayEnvelope;
 use Apntalk\EslCore\Replay\ReplayEnvelopeFactory;
-use Apntalk\EslReact\Bgapi\PendingBgapiJob;
 use Apntalk\EslCore\Replies\ApiReply;
+use Apntalk\EslReact\Bgapi\PendingBgapiJob;
+use Closure;
+use Throwable;
 
 final class RuntimeReplayCapture
 {
@@ -25,13 +29,13 @@ final class RuntimeReplayCapture
 
     /**
      * @param list<ReplayCaptureSinkInterface> $sinks
-     * @param \Closure(): array<string, string> $runtimeMetadataProvider
+     * @param Closure(): array<string, string> $runtimeMetadataProvider
      */
     public function __construct(
         private readonly CorrelationContext $correlation,
         array $sinks = [],
         bool $enabled = false,
-        private readonly ?\Closure $runtimeMetadataProvider = null,
+        private readonly ?Closure $runtimeMetadataProvider = null,
     ) {
         $this->sinks = array_values($sinks);
         $this->enabled = $enabled;
@@ -56,9 +60,9 @@ final class RuntimeReplayCapture
             derivedMetadata: $this->derivedMetadata(RuntimeReplayArtifact::withIdentity(
                 RuntimeReplayArtifact::API_DISPATCH,
                 [
-                'runtime-command-type' => 'api',
-                'runtime-command-name' => $command,
-                'runtime-command-args' => $args,
+                    'runtime-command-type' => 'api',
+                    'runtime-command-name' => $command,
+                    'runtime-command-args' => $args,
                 ],
             )),
         );
@@ -82,9 +86,9 @@ final class RuntimeReplayCapture
             derivedMetadata: $this->derivedMetadata(RuntimeReplayArtifact::withIdentity(
                 RuntimeReplayArtifact::BGAPI_DISPATCH,
                 [
-                'runtime-command-type' => 'bgapi',
-                'runtime-command-name' => $command,
-                'runtime-command-args' => $args,
+                    'runtime-command-type' => 'bgapi',
+                    'runtime-command-name' => $command,
+                    'runtime-command-args' => $args,
                 ],
             )),
         );
@@ -290,7 +294,7 @@ final class RuntimeReplayCapture
         foreach ($this->sinks as $sink) {
             try {
                 $sink->capture($replayEnvelope);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 fwrite(STDERR, "[esl-react] Replay capture sink exception: {$e->getMessage()}\n");
             }
         }
@@ -323,7 +327,7 @@ final class RuntimeReplayCapture
      */
     private function filterFacts(array $facts): array
     {
-        return array_filter($facts, static fn (string $value): bool => $value !== '');
+        return array_filter($facts, static fn(string $value): bool => $value !== '');
     }
 
     private function nextCaptureSequence(): int

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -38,11 +40,10 @@ final class RuntimeChaosTest extends AsyncTestCase
         );
 
         $api = $client->api('status');
-        $api->then(null, static function (): void {
-        });
+        $api->then(null, static function (): void {});
 
         $this->waitUntil(
-            fn (): bool => in_array('api status', $server->receivedCommands(), true),
+            fn(): bool => in_array('api status', $server->receivedCommands(), true),
             0.2,
         );
 
@@ -55,7 +56,7 @@ final class RuntimeChaosTest extends AsyncTestCase
         }
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.2,
         );
 
@@ -95,11 +96,10 @@ final class RuntimeChaosTest extends AsyncTestCase
         );
 
         $api = $client->api('status');
-        $api->then(null, static function (): void {
-        });
+        $api->then(null, static function (): void {});
 
         $this->waitUntil(
-            fn (): bool => count($server->receivedCommands()) >= 2
+            fn(): bool => count($server->receivedCommands()) >= 2
                 && $server->receivedCommands()[1] === 'api status',
             0.2,
         );
@@ -113,7 +113,7 @@ final class RuntimeChaosTest extends AsyncTestCase
         }
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
             0.2,
         );
 
@@ -124,7 +124,7 @@ final class RuntimeChaosTest extends AsyncTestCase
         self::assertFalse($recovering->isDraining);
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
                 && $server->connectionCount() === 2,
             0.4,
         );
@@ -166,7 +166,7 @@ final class RuntimeChaosTest extends AsyncTestCase
         $server->writeRawFrame($server->activeConnection(), "Content-Type auth/request\n\n");
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.2,
         );
 
@@ -217,7 +217,7 @@ final class RuntimeChaosTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
                 && $server->connectionCount() === 2,
             0.4,
         );

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -124,7 +126,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         $handle = $client->bgapi('status');
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() === $jobUuid,
+            fn(): bool => $handle->jobUuid() === $jobUuid,
             0.2,
         );
 
@@ -132,7 +134,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         $this->await($handle->promise());
 
         $paths = array_map(
-            static fn ($envelope): string => $envelope->derivedMetadata()['runtime-capture-path'],
+            static fn($envelope): string => $envelope->derivedMetadata()['runtime-capture-path'],
             $sink->captured(),
         );
 
@@ -167,7 +169,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         ]);
 
         $this->waitUntil(
-            fn (): bool => count($sink->captured()) === 1,
+            fn(): bool => count($sink->captured()) === 1,
             0.2,
         );
 
@@ -375,7 +377,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
             0.2,
         );
 
@@ -470,7 +472,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
                 && $server->connectionCount() === 2,
             0.4,
         );
@@ -516,7 +518,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
                 && $server->connectionCount() === 2,
             0.4,
         );
@@ -618,7 +620,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         );
 
         $handle = $client->bgapi('status');
-        $this->waitUntil(fn (): bool => $handle->jobUuid() === $jobUuid, 0.2);
+        $this->waitUntil(fn(): bool => $handle->jobUuid() === $jobUuid, 0.2);
 
         try {
             $this->await($client->disconnect(), 0.2);
@@ -628,7 +630,7 @@ final class ReplayHooksIntegrationTest extends AsyncTestCase
         }
 
         $artifactNames = array_map(
-            static fn ($envelope): string => $envelope->derivedMetadata()['replay-artifact-name'],
+            static fn($envelope): string => $envelope->derivedMetadata()['replay-artifact-name'],
             $sink->captured(),
         );
 

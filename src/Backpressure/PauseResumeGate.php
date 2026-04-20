@@ -1,6 +1,10 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Backpressure;
+
+use Throwable;
 
 final class PauseResumeGate
 {
@@ -23,7 +27,7 @@ final class PauseResumeGate
         foreach ($this->resumeListeners as $listener) {
             try {
                 $listener();
-            } catch (\Throwable) {
+            } catch (Throwable) {
             }
         }
     }

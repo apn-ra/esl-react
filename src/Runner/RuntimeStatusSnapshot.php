@@ -1,8 +1,11 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslReact\Health\HealthSnapshot;
+use JsonSerializable;
 
 /**
  * Exportable live-runtime status snapshot for downstream supervision/reporting.
@@ -11,7 +14,7 @@ use Apntalk\EslReact\Health\HealthSnapshot;
  * process-level event-loop liveness, durable persistence, or cross-process
  * coordination guarantees.
  */
-final class RuntimeStatusSnapshot implements \JsonSerializable
+final class RuntimeStatusSnapshot implements JsonSerializable
 {
     public function __construct(
         public readonly string $endpoint,

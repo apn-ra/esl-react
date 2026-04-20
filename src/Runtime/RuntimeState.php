@@ -1,9 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Runtime;
+
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Session\SessionState;
 
-final class RuntimeState {
+final class RuntimeState
+{
     public function __construct(
         public readonly ConnectionState $connectionState,
         public readonly SessionState $sessionState,
@@ -11,7 +16,8 @@ final class RuntimeState {
         public readonly bool $isDraining,
     ) {}
 
-    public function canAcceptCommands(): bool {
+    public function canAcceptCommands(): bool
+    {
         return $this->connectionState->canAcceptCommands() && !$this->isDraining;
     }
 }

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -112,7 +114,7 @@ final class LiveRuntimeRunnerHeartbeatReconnectCompatibilityTest extends AsyncTe
                     && $handle->lifecycleSnapshot()->isLive() === false
                     && array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === false
                             && $marker['reconnecting'] === false
@@ -131,7 +133,7 @@ final class LiveRuntimeRunnerHeartbeatReconnectCompatibilityTest extends AsyncTe
             $this->waitUntil(function () use ($handle, &$markers): bool {
                 return array_filter(
                     $markers,
-                    static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                    static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                         && $marker['session'] === 'disconnected'
                         && $marker['live'] === false
                         && $marker['reconnecting'] === true
@@ -150,7 +152,7 @@ final class LiveRuntimeRunnerHeartbeatReconnectCompatibilityTest extends AsyncTe
 
             self::assertSame([], array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['draining'] === true
+                static fn(array $marker): bool => $marker['draining'] === true
                     || $marker['connection'] === 'draining'
             ), 'Heartbeat-failure reconnect should not be reported as drain.');
 
@@ -167,7 +169,7 @@ final class LiveRuntimeRunnerHeartbeatReconnectCompatibilityTest extends AsyncTe
                     && $handle->lifecycleSnapshot()->isLive()
                     && count(array_filter(
                         $markers,
-                        static fn (array $marker): bool => $marker['connection'] === 'authenticated'
+                        static fn(array $marker): bool => $marker['connection'] === 'authenticated'
                             && $marker['session'] === 'active'
                             && $marker['live'] === true
                             && $marker['reconnecting'] === false

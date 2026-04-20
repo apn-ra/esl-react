@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Protocol;
 
@@ -14,8 +16,8 @@ final class FrameReader
      * Feed raw bytes into the parser. Returns zero or more complete frames.
      * On ParseException, the parser is reset and the exception re-thrown.
      *
-     * @return list<Frame>
      * @throws ParseException
+     * @return list<Frame>
      */
     public function feed(string $bytes): array
     {

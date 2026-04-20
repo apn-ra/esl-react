@@ -1,11 +1,15 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Bgapi;
 
 use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslReact\Exceptions\CommandTimeoutException;
+use LogicException;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
+use Throwable;
 
 final class BgapiJobTracker
 {
@@ -24,7 +28,7 @@ final class BgapiJobTracker
     {
         $uuid = $job->jobUuid();
         if ($uuid === null) {
-            throw new \LogicException('Cannot register bgapi job without a Job-UUID');
+            throw new LogicException('Cannot register bgapi job without a Job-UUID');
         }
         $this->jobs[$uuid] = $job;
 
@@ -51,7 +55,7 @@ final class BgapiJobTracker
         return $job;
     }
 
-    public function abandon(string $jobUuid, \Throwable $reason): void
+    public function abandon(string $jobUuid, Throwable $reason): void
     {
         if (!isset($this->jobs[$jobUuid])) {
             return;
@@ -62,7 +66,7 @@ final class BgapiJobTracker
         $job->reject($reason);
     }
 
-    public function abandonAll(\Throwable $reason): void
+    public function abandonAll(Throwable $reason): void
     {
         foreach (array_keys($this->jobs) as $uuid) {
             $this->abandon($uuid, $reason);

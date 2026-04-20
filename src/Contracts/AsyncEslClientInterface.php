@@ -1,9 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Contracts;
+
 use Apntalk\EslReact\Bgapi\BgapiJobHandle;
 use React\Promise\PromiseInterface;
 
-interface AsyncEslClientInterface {
+interface AsyncEslClientInterface
+{
     /**
      * Establish the TCP connection and complete the ESL auth handshake.
      *
@@ -35,6 +40,8 @@ interface AsyncEslClientInterface {
      * Dispatch an asynchronous background API command.
      *
      * Returns a BgapiJobHandle immediately (synchronous).
+     * Throws ConnectionException synchronously if the runtime is not currently
+     * authenticated or is still recovering after an unexpected disconnect.
      * The handle's jobUuid() is empty until the bgapi acceptance reply arrives.
      * The handle's promise() resolves with BackgroundJobEvent when the matching
      * completion event arrives.
@@ -43,6 +50,7 @@ interface AsyncEslClientInterface {
      * Throws BackpressureException synchronously if the inflight limit is exceeded.
      * Throws DrainException synchronously if the runtime is draining.
      *
+     * @throws \Apntalk\EslReact\Exceptions\ConnectionException
      * @throws \Apntalk\EslReact\Exceptions\BackpressureException
      * @throws \Apntalk\EslReact\Exceptions\DrainException
      */

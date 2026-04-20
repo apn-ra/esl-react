@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -94,7 +96,7 @@ final class LiveRuntimeRunnerLifecycleCompatibilityTest extends AsyncTestCase
 
         self::assertNotEmpty(array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['runner'] === 'running'
+            static fn(array $marker): bool => $marker['runner'] === 'running'
                 && $marker['connection'] === 'authenticated'
                 && $marker['session'] === 'active'
                 && $marker['live'] === true
@@ -121,14 +123,14 @@ final class LiveRuntimeRunnerLifecycleCompatibilityTest extends AsyncTestCase
 
         self::assertNotEmpty(array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['connection'] === 'draining'
+            static fn(array $marker): bool => $marker['connection'] === 'draining'
                 && $marker['draining'] === true
                 && $marker['reconnecting'] === false
                 && $marker['stopped'] === false
         ));
         self::assertNotEmpty(array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['connection'] === 'closed'
+            static fn(array $marker): bool => $marker['connection'] === 'closed'
                 && $marker['session'] === 'disconnected'
                 && $marker['draining'] === false
                 && $marker['reconnecting'] === false

@@ -4,25 +4,26 @@ declare(strict_types=1);
 
 namespace Apntalk\EslReact\Protocol;
 
+use Apntalk\EslCore\Contracts\InboundPipelineInterface;
 use Apntalk\EslCore\Exceptions\ParseException;
-use Apntalk\EslCore\Protocol\Frame;
+use Apntalk\EslCore\Inbound\DecodedInboundMessage;
 use React\Socket\ConnectionInterface;
 
-final class EnvelopePump
+final class InboundMessagePump
 {
     private bool $running = false;
-    /** @var callable(Frame): void|null */
-    private $frameHandler = null;
+    /** @var callable(DecodedInboundMessage): void|null */
+    private $messageHandler = null;
     /** @var callable(ParseException): void|null */
     private $parseErrorHandler = null;
 
     public function __construct(
-        private readonly FrameReader $reader,
+        private readonly InboundPipelineInterface $pipeline,
     ) {}
 
-    public function onFrame(callable $handler): void
+    public function onMessage(callable $handler): void
     {
-        $this->frameHandler = $handler;
+        $this->messageHandler = $handler;
     }
 
     public function onParseError(callable $handler): void
@@ -33,21 +34,24 @@ final class EnvelopePump
     public function attach(ConnectionInterface $connection): void
     {
         $this->running = true;
-        $this->reader->reset();
+        $this->pipeline->reset();
 
         $connection->on('data', function (string $chunk): void {
             if (!$this->running) {
                 return;
             }
+
             try {
-                $frames = $this->reader->feed($chunk);
-                foreach ($frames as $frame) {
-                    if ($this->frameHandler !== null) {
-                        ($this->frameHandler)($frame);
+                $this->pipeline->push($chunk);
+
+                foreach ($this->pipeline->drain() as $message) {
+                    if ($this->messageHandler !== null) {
+                        ($this->messageHandler)($message);
                     }
                 }
             } catch (ParseException $e) {
-                $this->reader->reset();
+                $this->pipeline->reset();
+
                 if ($this->parseErrorHandler !== null) {
                     ($this->parseErrorHandler)($e);
                 }

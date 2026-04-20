@@ -1,7 +1,13 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Config;
 
-final class RetryPolicy {
+use InvalidArgumentException;
+
+final class RetryPolicy
+{
     private function __construct(
         public readonly bool $enabled,
         public readonly int $maxAttempts,
@@ -11,21 +17,22 @@ final class RetryPolicy {
     ) {
         if ($this->enabled) {
             if ($this->maxAttempts < 0) {
-                throw new \InvalidArgumentException('maxAttempts must be >= 0 (0 = unlimited)');
+                throw new InvalidArgumentException('maxAttempts must be >= 0 (0 = unlimited)');
             }
             if ($this->initialDelaySeconds <= 0) {
-                throw new \InvalidArgumentException('initialDelaySeconds must be positive');
+                throw new InvalidArgumentException('initialDelaySeconds must be positive');
             }
             if ($this->maxDelaySeconds < $this->initialDelaySeconds) {
-                throw new \InvalidArgumentException('maxDelaySeconds must be >= initialDelaySeconds');
+                throw new InvalidArgumentException('maxDelaySeconds must be >= initialDelaySeconds');
             }
             if ($this->backoffMultiplier < 1.0) {
-                throw new \InvalidArgumentException('backoffMultiplier must be >= 1.0');
+                throw new InvalidArgumentException('backoffMultiplier must be >= 1.0');
             }
         }
     }
 
-    public static function default(): self {
+    public static function default(): self
+    {
         return new self(
             enabled: true,
             maxAttempts: 0,
@@ -35,7 +42,8 @@ final class RetryPolicy {
         );
     }
 
-    public static function disabled(): self {
+    public static function disabled(): self
+    {
         return new self(
             enabled: false,
             maxAttempts: 0,
@@ -45,7 +53,8 @@ final class RetryPolicy {
         );
     }
 
-    public static function withMaxAttempts(int $maxAttempts, float $initialDelay = 1.0): self {
+    public static function withMaxAttempts(int $maxAttempts, float $initialDelay = 1.0): self
+    {
         return new self(
             enabled: true,
             maxAttempts: $maxAttempts,
@@ -55,7 +64,8 @@ final class RetryPolicy {
         );
     }
 
-    public function delayForAttempt(int $attempt): float {
+    public function delayForAttempt(int $attempt): float
+    {
         if (!$this->enabled || $attempt <= 0) {
             return 0.0;
         }
@@ -63,7 +73,8 @@ final class RetryPolicy {
         return min($delay, $this->maxDelaySeconds);
     }
 
-    public function hasExhausted(int $attempts): bool {
+    public function hasExhausted(int $attempts): bool
+    {
         if (!$this->enabled) {
             return true;
         }

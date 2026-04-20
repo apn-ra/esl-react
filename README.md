@@ -17,8 +17,8 @@ Current implementation status:
 - The current connect/auth handshake timeout reuses `CommandTimeoutConfig::$apiTimeoutSeconds`, fails closed, stops autonomous reconnect for that startup attempt, and surfaces `handshake_timeout` on the runner reconnect/status snapshots.
 - `disconnect()` now enters bounded drain mode: new work is rejected immediately, already-accepted work may settle until the configured drain timeout, remaining inflight work is then terminated deterministically, and the runtime closes terminally without reconnecting.
 
-Release note and tag-prep summary for the current patch release:
-[docs/release-prep-v0.2.11.md](docs/release-prep-v0.2.11.md)
+Release note and tag-prep summary for the next patch release:
+[docs/release-prep-v0.2.12.md](docs/release-prep-v0.2.12.md)
 
 ---
 
@@ -141,7 +141,7 @@ Current runner truth:
 - `PreparedRuntimeBootstrapInput` can also carry an explicit prepared dial target URI, so higher layers may reuse the prepared connector path for non-default schemes such as `tls://...` without moving runtime ownership out of `esl-react`.
 - `PreparedRuntimeBootstrapInput` can also inject replay capture explicitly for the prepared runner handoff, reusing the stable `ReplayCaptureSinkInterface` contract from `apntalk/esl-core`.
 - The prepared connector is used for live startup and reconnect attempts. This lets higher layers prepare transport access without making `esl-react` own their control plane.
-- The prepared pipeline is accepted and reset as part of the runner handoff lifecycle, but decoded-pipeline routing is not active yet. The current live protocol loop still uses the existing frame pump/router path.
+- The prepared pipeline is accepted, reset at handoff, and then reused as the live inbound decode path for startup and reconnect attempts on that runtime instance.
 - Direct polling of `apntalk/esl-core` `TransportInterface` and full replacement of the live ingress router with `InboundPipelineInterface` remain deferred.
 
 Lifecycle observer notes:

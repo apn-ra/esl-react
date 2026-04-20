@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Events;
 
@@ -9,6 +11,8 @@ use Apntalk\EslCore\Events\EventFactory;
 use Apntalk\EslCore\Events\RawEvent;
 use Apntalk\EslCore\Protocol\Frame;
 use Apntalk\EslReact\Contracts\EventStreamInterface;
+use Closure;
+use Throwable;
 
 final class EventStream implements EventStreamInterface
 {
@@ -16,7 +20,7 @@ final class EventStream implements EventStreamInterface
     private readonly UnknownEventHandler $unknownHandler;
     /** @var list<callable(EventEnvelope): void> */
     private array $rawEnvelopeListeners = [];
-    private \Closure $envelopeErrorHandler;
+    private Closure $envelopeErrorHandler;
 
     public function __construct(
         private readonly EventFactory $eventFactory,
@@ -26,40 +30,49 @@ final class EventStream implements EventStreamInterface
         $this->typedEmitter = new TypedEventEmitter($errorHandler);
         $this->unknownHandler = new UnknownEventHandler($errorHandler);
         $this->envelopeErrorHandler = $errorHandler !== null
-            ? \Closure::fromCallable($errorHandler)
-            : static function (\Throwable $e): void {
+            ? Closure::fromCallable($errorHandler)
+            : static function (Throwable $e): void {
                 fwrite(STDERR, "[esl-react] Raw envelope listener exception: {$e->getMessage()}\n");
             };
     }
 
     /**
-     * Called by the EnvelopePump when an event frame arrives.
+     * Called when a live inbound frame arrives on the runtime ingress path.
      * Produces typed event, wraps in EventEnvelope, dispatches to all listeners.
      */
     public function handleFrame(Frame $frame): void
     {
         try {
             $event = $this->eventFactory->fromFrame($frame);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             fwrite(STDERR, "[esl-react] EventFactory::fromFrame failed: {$e->getMessage()}\n");
             return;
         }
 
+        $this->dispatchEvent($event);
+    }
+
+    public function handleEvent(EventInterface $event): void
+    {
+        $this->dispatchEvent($event);
+    }
+
+    private function dispatchEvent(EventInterface $event): void
+    {
         $metadata = $this->correlationContext->nextMetadataForEvent($event);
         $envelope = new EventEnvelope($event, $metadata);
 
-        // Dispatch raw envelope first
         foreach ($this->rawEnvelopeListeners as $listener) {
             try {
                 $listener($envelope);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 try {
                     ($this->envelopeErrorHandler)($e, $envelope);
-                } catch (\Throwable) {}
+                } catch (Throwable) {
+                }
             }
         }
 
-        // Dispatch typed event
         if ($event instanceof RawEvent) {
             $this->unknownHandler->dispatch($event);
         } else {

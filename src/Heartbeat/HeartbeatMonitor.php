@@ -1,10 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Heartbeat;
 
 use Apntalk\EslReact\Config\HeartbeatConfig;
+use Closure;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
+use Throwable;
 
 final class HeartbeatMonitor
 {
@@ -18,7 +22,7 @@ final class HeartbeatMonitor
     /** @var list<callable(LivenessState, LivenessState): void> */
     private array $stateChangeListeners = [];
 
-    private ?\Closure $probeCallback = null;
+    private ?Closure $probeCallback = null;
 
     public function __construct(
         private readonly HeartbeatConfig $config,
@@ -28,7 +32,7 @@ final class HeartbeatMonitor
 
     public function setProbeCallback(callable $callback): void
     {
-        $this->probeCallback = \Closure::fromCallable($callback);
+        $this->probeCallback = Closure::fromCallable($callback);
     }
 
     public function start(): void
@@ -119,7 +123,7 @@ final class HeartbeatMonitor
         foreach ($this->stateChangeListeners as $listener) {
             try {
                 $listener($newState, $old);
-            } catch (\Throwable) {
+            } catch (Throwable) {
             }
         }
     }

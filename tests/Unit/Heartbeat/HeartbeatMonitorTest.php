@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Unit\Heartbeat;
 
@@ -25,14 +27,14 @@ final class HeartbeatMonitorTest extends AsyncTestCase
         $monitor->start();
 
         $this->waitUntil(
-            fn (): bool => $monitor->state() === LivenessState::Degraded,
+            fn(): bool => $monitor->state() === LivenessState::Degraded,
             0.05,
         );
 
         self::assertSame(1, $probeCount);
 
         $this->waitUntil(
-            fn (): bool => $monitor->state() === LivenessState::Dead,
+            fn(): bool => $monitor->state() === LivenessState::Dead,
             0.05,
         );
 
@@ -50,7 +52,7 @@ final class HeartbeatMonitorTest extends AsyncTestCase
         $monitor->start();
 
         $this->waitUntil(
-            fn (): bool => $monitor->state() === LivenessState::Degraded,
+            fn(): bool => $monitor->state() === LivenessState::Degraded,
             0.05,
         );
 

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Support;
 
@@ -6,6 +8,8 @@ use PHPUnit\Framework\TestCase;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\StreamSelectLoop;
 use React\Promise\PromiseInterface;
+use RuntimeException;
+use Throwable;
 
 abstract class AsyncTestCase extends TestCase
 {
@@ -34,7 +38,7 @@ abstract class AsyncTestCase extends TestCase
                 $value = $result;
                 $this->loop->stop();
             },
-            function (\Throwable $e) use (&$settled, &$error): void {
+            function (Throwable $e) use (&$settled, &$error): void {
                 $settled = true;
                 $error = $e;
                 $this->loop->stop();
@@ -42,7 +46,7 @@ abstract class AsyncTestCase extends TestCase
         );
 
         $timer = $this->loop->addTimer($timeoutSeconds, function () use (&$error, $timeoutSeconds): void {
-            $error = new \RuntimeException(sprintf('Timed out after %.2f seconds waiting for promise settlement', $timeoutSeconds));
+            $error = new RuntimeException(sprintf('Timed out after %.2f seconds waiting for promise settlement', $timeoutSeconds));
             $this->loop->stop();
         });
 
@@ -52,7 +56,7 @@ abstract class AsyncTestCase extends TestCase
         $this->loop->cancelTimer($timer);
 
         if (!$settled && $error === null) {
-            throw new \RuntimeException('Promise did not settle');
+            throw new RuntimeException('Promise did not settle');
         }
 
         if ($error !== null) {
@@ -89,7 +93,7 @@ abstract class AsyncTestCase extends TestCase
         });
 
         $timeout = $this->loop->addTimer($timeoutSeconds, function () use (&$error, $timeoutSeconds): void {
-            $error = new \RuntimeException(sprintf('Condition did not become true within %.2f seconds', $timeoutSeconds));
+            $error = new RuntimeException(sprintf('Condition did not become true within %.2f seconds', $timeoutSeconds));
             $this->loop->stop();
         });
 
@@ -97,7 +101,7 @@ abstract class AsyncTestCase extends TestCase
         $this->loop->cancelTimer($poller);
         $this->loop->cancelTimer($timeout);
 
-        if ($error instanceof \Throwable) {
+        if ($error instanceof Throwable) {
             throw $error;
         }
     }

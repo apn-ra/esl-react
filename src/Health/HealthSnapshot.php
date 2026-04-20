@@ -1,9 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Apntalk\EslReact\Health;
+
 use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Session\SessionState;
 
-final class HealthSnapshot {
+final class HealthSnapshot
+{
     public function __construct(
         public readonly ConnectionState $connectionState,
         public readonly SessionState $sessionState,
@@ -21,7 +26,8 @@ final class HealthSnapshot {
         public readonly ?float $lastHeartbeatAtMicros,
     ) {}
 
-    public static function initial(string $host, int $port): self {
+    public static function initial(string $host, int $port): self
+    {
         return new self(
             connectionState: ConnectionState::Disconnected,
             sessionState: SessionState::NotStarted,
@@ -40,11 +46,13 @@ final class HealthSnapshot {
         );
     }
 
-    public function isConnected(): bool {
+    public function isConnected(): bool
+    {
         return $this->connectionState->isConnectedOrAbove();
     }
 
-    public function isAuthenticated(): bool {
+    public function isAuthenticated(): bool
+    {
         return $this->connectionState === ConnectionState::Authenticated
             || $this->connectionState === ConnectionState::Draining;
     }

@@ -1,5 +1,7 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-\Apntalk\EslReact\Tests\Support\LiveHarnessEnvLoader::load(dirname(__DIR__));
+Apntalk\EslReact\Tests\Support\LiveHarnessEnvLoader::load(dirname(__DIR__));

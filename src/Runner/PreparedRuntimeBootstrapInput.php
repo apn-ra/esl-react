@@ -1,13 +1,16 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
 
 use Apntalk\EslCore\Contracts\InboundPipelineInterface;
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslReact\Config\RuntimeConfig;
-use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
+use InvalidArgumentException;
 use React\Socket\ConnectorInterface;
 
 final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInputInterface, PreparedRuntimeDialTargetInputInterface, PreparedRuntimeReplayCaptureInputInterface
@@ -30,19 +33,19 @@ final class PreparedRuntimeBootstrapInput implements PreparedRuntimeBootstrapInp
             : null;
 
         if ($this->endpoint === '') {
-            throw new \InvalidArgumentException('endpoint must not be empty');
+            throw new InvalidArgumentException('endpoint must not be empty');
         }
 
         if ($this->dialUri !== null && $this->dialUri === '') {
-            throw new \InvalidArgumentException('dialUri must not be empty when provided');
+            throw new InvalidArgumentException('dialUri must not be empty when provided');
         }
 
         if ($this->replayCaptureEnabledOverride === false && $this->replayCaptureSinksOverride !== null && $this->replayCaptureSinksOverride !== []) {
-            throw new \InvalidArgumentException('replayCaptureSinks must be empty when replay capture is explicitly disabled');
+            throw new InvalidArgumentException('replayCaptureSinks must be empty when replay capture is explicitly disabled');
         }
 
         if ($this->replayCaptureEnabled() && $this->replayCaptureSinks() === []) {
-            throw new \InvalidArgumentException('replayCaptureSinks must not be empty when replay capture is enabled');
+            throw new InvalidArgumentException('replayCaptureSinks must not be empty when replay capture is enabled');
         }
     }
 

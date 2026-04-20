@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -144,7 +146,7 @@ final class LiveRuntimeRunnerBgapiEventCompatibilityTest extends AsyncTestCase
         self::assertSame($bgapiArgs, $job->eslArgs());
 
         $this->waitUntil(
-            fn (): bool => $job->jobUuid() !== '',
+            fn(): bool => $job->jobUuid() !== '',
             6.0,
         );
 
@@ -164,7 +166,7 @@ final class LiveRuntimeRunnerBgapiEventCompatibilityTest extends AsyncTestCase
 
         self::assertSame([], array_filter(
             $markers,
-            static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+            static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                 || $marker['reconnecting'] === true
                 || $marker['connection'] === 'draining'
                 || $marker['draining'] === true

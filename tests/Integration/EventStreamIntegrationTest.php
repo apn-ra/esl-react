@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -10,6 +12,7 @@ use Apntalk\EslReact\Config\RuntimeConfig;
 use Apntalk\EslReact\Tests\FakeServer\ScriptedFakeEslServer;
 use Apntalk\EslReact\Tests\Support\AsyncTestCase;
 use React\Promise\Deferred;
+use RuntimeException;
 
 final class EventStreamIntegrationTest extends AsyncTestCase
 {
@@ -179,7 +182,7 @@ final class EventStreamIntegrationTest extends AsyncTestCase
         $deferred = new Deferred();
         $seen = [];
         $client->events()->onEvent('CHANNEL_CREATE', function (): void {
-            throw new \RuntimeException('listener boom');
+            throw new RuntimeException('listener boom');
         });
         $client->events()->onEvent('CHANNEL_CREATE', function ($event) use (&$seen, $deferred): void {
             $seen[] = $event->eventName();

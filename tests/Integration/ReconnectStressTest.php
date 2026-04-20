@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -40,7 +42,7 @@ final class ReconnectStressTest extends AsyncTestCase
         for ($expectedConnections = 2; $expectedConnections <= 4; $expectedConnections++) {
             $server->closeActiveConnection();
             $this->waitUntil(
-                fn (): bool => $server->connectionCount() === $expectedConnections
+                fn(): bool => $server->connectionCount() === $expectedConnections
                     && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
                 0.6,
             );
@@ -90,7 +92,7 @@ final class ReconnectStressTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() >= 2
+            fn(): bool => $server->connectionCount() >= 2
                 && $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
             0.4,
         );
@@ -100,7 +102,7 @@ final class ReconnectStressTest extends AsyncTestCase
         self::assertSame(SessionState::Disconnected, $recovering->sessionState);
 
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() === 3
+            fn(): bool => $server->connectionCount() === 3
                 && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
             0.8,
         );

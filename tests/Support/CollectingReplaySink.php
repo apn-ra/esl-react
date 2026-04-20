@@ -1,9 +1,12 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Support;
 
 use Apntalk\EslCore\Contracts\ReplayCaptureSinkInterface;
 use Apntalk\EslCore\Contracts\ReplayEnvelopeInterface;
+use RuntimeException;
 
 final class CollectingReplaySink implements ReplayCaptureSinkInterface
 {
@@ -17,7 +20,7 @@ final class CollectingReplaySink implements ReplayCaptureSinkInterface
     public function capture(ReplayEnvelopeInterface $envelope): void
     {
         if ($this->throwOnCapture) {
-            throw new \RuntimeException('capture sink boom');
+            throw new RuntimeException('capture sink boom');
         }
 
         $this->captured[] = $envelope;

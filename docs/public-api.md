@@ -52,10 +52,10 @@ Current contract notes for the implemented slice:
 - `api()` and subscription/filter mutations are rejected while the runtime is recovering after an unexpected disconnect.
 - `disconnect()` is terminal for the runtime instance; it does not trigger reconnect.
 - `disconnect()` is a bounded drain, not an immediate abort: new work is rejected immediately, accepted inflight work gets a bounded settle window, and remaining work is rejected deterministically at the drain deadline.
-- `bgapi()` is illegal before successful authentication and during recovery.
+- `bgapi()` throws `ConnectionException` synchronously before successful authentication and during recovery.
 - `bgapi()` returns a handle immediately; `BgapiJobHandle::jobUuid()` becomes non-empty only after FreeSWITCH acknowledges the bgapi command.
 - Pending bgapi jobs survive unexpected supervised reconnect but are rejected with `DrainException` on explicit shutdown.
-- Overload rejects new `api()`, `bgapi()`, and live-session subscription/filter mutations with `BackpressureException`.
+- Overload rejects new `api()` and live-session subscription/filter mutations with `BackpressureException`; `bgapi()` throws `BackpressureException` synchronously on the same condition.
 
 | Method | Return type | Description |
 |---|---|---|
@@ -110,6 +110,7 @@ Current subscription/filter notes:
 - `RuntimeConfig::$subscriptions` seeds the initial desired event/filter state before the first successful authentication.
 - Mutations are only allowed while the runtime is authenticated and not draining.
 - Normal runtime gating failures on these promise-returning methods reject the returned promise rather than throwing synchronously; promise consumers can rely on `then(null, ...)` observing `ConnectionException`, `BackpressureException`, or `DrainException` as applicable.
+- Server `-ERR` replies on live subscription/filter mutation commands also reject the returned promise with `ConnectionException`; the failed mutation does not update desired or observed session state.
 - Desired active subscriptions and filters are tracked locally in memory.
 - Duplicate subscribe/filter-add operations and removal of missing state are idempotent no-ops.
 - `subscribeAll()` is supported, but specific unsubscribe from the "all events" state rejects with `ConnectionException` in the current implementation.
@@ -125,6 +126,8 @@ Apntalk\EslReact\Contracts\HealthReporterInterface
 | Method | Return type | Description |
 |---|---|---|
 | `snapshot()` | `HealthSnapshot` | Return a point-in-time health snapshot |
+| `isConnected()` | `bool` | Whether the socket is currently connected or further along in the connection state machine |
+| `isAuthenticated()` | `bool` | Whether the runtime is currently authenticated, including the explicit drain path from an authenticated session |
 | `isLive()` | `bool` | Whether the heartbeat monitor considers the connection alive |
 
 Current health notes:
@@ -169,7 +172,7 @@ Current runner notes:
 - `PreparedRuntimeDialTargetInputInterface` additively allows richer prepared-bootstrap inputs to override the dial target URI used by the prepared connector for startup and reconnect attempts.
 - `PreparedRuntimeReplayCaptureInputInterface` additively allows richer prepared-bootstrap inputs to inject replay capture sinks explicitly on the runner seam while reusing the stable `ReplayCaptureSinkInterface` contract from `apntalk/esl-core`.
 - Ongoing runtime lifecycle after startup remains on the stable client/health surface rather than a second parallel runner control plane.
-- Direct polling of `apntalk/esl-core` `TransportInterface` and decoded `InboundPipelineInterface` routing are not part of this runner-input expansion.
+- Direct polling of `apntalk/esl-core` `TransportInterface` is not part of this runner-input expansion.
 
 ### RuntimeLifecycleSnapshot
 

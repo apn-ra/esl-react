@@ -1,17 +1,14 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Protocol;
 
 use Apntalk\EslCore\Contracts\InboundMessageClassifierInterface;
 use Apntalk\EslCore\Contracts\ReplyInterface;
 use Apntalk\EslCore\Protocol\Frame;
-use Apntalk\EslCore\Replies\ApiReply;
-use Apntalk\EslCore\Replies\AuthAcceptedReply;
-use Apntalk\EslCore\Replies\BgapiAcceptedReply;
-use Apntalk\EslCore\Replies\CommandReply;
-use Apntalk\EslCore\Replies\ErrorReply;
 use Apntalk\EslCore\Replies\ReplyFactory;
-use Apntalk\EslCore\Replies\UnknownReply;
+use Throwable;
 
 final class InboundMessageRouter
 {
@@ -23,7 +20,7 @@ final class InboundMessageRouter
     private $onEventHandler = null;
     /** @var callable(Frame): void|null */
     private $onDisconnectHandler = null;
-    /** @var callable(Frame, \Throwable|null): void|null */
+    /** @var callable(Frame, Throwable|null): void|null */
     private $onUnroutableHandler = null;
 
     private readonly ReplyFactory $replyFactory;
@@ -100,7 +97,7 @@ final class InboundMessageRouter
 
             // Unknown / unroutable frame
             $this->dispatch($this->onUnroutableHandler, $frame, null);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->dispatch($this->onUnroutableHandler, $frame, $e);
         }
     }
@@ -112,6 +109,7 @@ final class InboundMessageRouter
         }
         try {
             $handler(...$args);
-        } catch (\Throwable) {}
+        } catch (Throwable) {
+        }
     }
 }

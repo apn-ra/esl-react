@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -67,7 +69,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() === 2
+            fn(): bool => $server->connectionCount() === 2
                 && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
             0.5,
         );
@@ -136,7 +138,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
             0.2,
         );
 
@@ -160,7 +162,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         }
 
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() === 2
+            fn(): bool => $server->connectionCount() === 2
                 && $client->health()->snapshot()->connectionState === ConnectionState::Authenticated,
             0.5,
         );
@@ -261,7 +263,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         $server->closeActiveConnection();
 
         $this->waitUntil(
-            fn (): bool => $server->connectionCount() === 3
+            fn(): bool => $server->connectionCount() === 3
                 && $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.5,
         );
@@ -309,7 +311,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertFalse($degraded->isDraining);
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Disconnected,
             0.2,
         );
 
@@ -361,7 +363,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         $this->await($client->connect());
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Reconnecting,
             0.2,
         );
 
@@ -371,7 +373,7 @@ final class ReconnectHeartbeatHealthIntegrationTest extends AsyncTestCase
         self::assertFalse($recovering->isDraining);
 
         $this->waitUntil(
-            fn (): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
+            fn(): bool => $client->health()->snapshot()->connectionState === ConnectionState::Authenticated
                 && $server->connectionCount() === 2,
             0.4,
         );

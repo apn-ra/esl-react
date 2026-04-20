@@ -1,16 +1,18 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Contract;
 
 use Apntalk\EslReact\AsyncEslRuntime;
-use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
+use Apntalk\EslReact\Contracts\PreparedRuntimeBootstrapInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeDialTargetInputInterface;
 use Apntalk\EslReact\Contracts\PreparedRuntimeReplayCaptureInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
-use Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInputInterface;
 use Apntalk\EslReact\Contracts\RuntimeRunnerInterface;
+use Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface;
 use Apntalk\EslReact\Runner\PreparedRuntimeBootstrapInput;
 use Apntalk\EslReact\Runner\PreparedRuntimeInput;
 use Apntalk\EslReact\Runner\RuntimeFeedbackSnapshot;
@@ -20,10 +22,13 @@ use Apntalk\EslReact\Runner\RuntimeReconnectPhase;
 use Apntalk\EslReact\Runner\RuntimeReconnectStateSnapshot;
 use Apntalk\EslReact\Runner\RuntimeReconnectStopReason;
 use Apntalk\EslReact\Runner\RuntimeRunnerHandle;
-use Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot;
 use Apntalk\EslReact\Runner\RuntimeStatusPhase;
 use Apntalk\EslReact\Runner\RuntimeStatusSnapshot;
+use Apntalk\EslReact\Runner\RuntimeSubscriptionStateSnapshot;
+use JsonSerializable;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+use ReflectionNamedType;
 
 final class PublicApiContractTest extends TestCase
 {
@@ -34,10 +39,10 @@ final class PublicApiContractTest extends TestCase
 
     public function testAsyncEslRuntimeMakeHasStableReturnType(): void
     {
-        $method = new \ReflectionMethod(AsyncEslRuntime::class, 'make');
+        $method = new ReflectionMethod(AsyncEslRuntime::class, 'make');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(AsyncEslClientInterface::class, $returnType->getName());
     }
 
@@ -50,10 +55,10 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'lifecycleSnapshot'));
 
-        $method = new \ReflectionMethod(RuntimeRunnerHandle::class, 'lifecycleSnapshot');
+        $method = new ReflectionMethod(RuntimeRunnerHandle::class, 'lifecycleSnapshot');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeLifecycleSnapshot::class, $returnType->getName());
     }
 
@@ -67,10 +72,10 @@ final class PublicApiContractTest extends TestCase
         self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'feedbackSnapshot'));
         self::assertTrue(is_a(RuntimeRunnerHandle::class, RuntimeFeedbackProviderInterface::class, true));
 
-        $method = new \ReflectionMethod(RuntimeRunnerHandle::class, 'feedbackSnapshot');
+        $method = new ReflectionMethod(RuntimeRunnerHandle::class, 'feedbackSnapshot');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeFeedbackSnapshot::class, $returnType->getName());
     }
 
@@ -78,10 +83,10 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(method_exists(RuntimeFeedbackSnapshot::class, 'subscriptionState'));
 
-        $method = new \ReflectionMethod(RuntimeFeedbackSnapshot::class, 'subscriptionState');
+        $method = new ReflectionMethod(RuntimeFeedbackSnapshot::class, 'subscriptionState');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeSubscriptionStateSnapshot::class, $returnType->getName());
     }
 
@@ -89,10 +94,10 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(method_exists(RuntimeFeedbackSnapshot::class, 'observedSubscriptionState'));
 
-        $method = new \ReflectionMethod(RuntimeFeedbackSnapshot::class, 'observedSubscriptionState');
+        $method = new ReflectionMethod(RuntimeFeedbackSnapshot::class, 'observedSubscriptionState');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeObservedSubscriptionStateSnapshot::class, $returnType->getName());
     }
 
@@ -100,10 +105,10 @@ final class PublicApiContractTest extends TestCase
     {
         self::assertTrue(method_exists(RuntimeFeedbackSnapshot::class, 'reconnectState'));
 
-        $method = new \ReflectionMethod(RuntimeFeedbackSnapshot::class, 'reconnectState');
+        $method = new ReflectionMethod(RuntimeFeedbackSnapshot::class, 'reconnectState');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeReconnectStateSnapshot::class, $returnType->getName());
     }
 
@@ -122,10 +127,10 @@ final class PublicApiContractTest extends TestCase
         self::assertTrue(method_exists(RuntimeRunnerHandle::class, 'statusSnapshot'));
         self::assertTrue(is_a(RuntimeRunnerHandle::class, RuntimeStatusProviderInterface::class, true));
 
-        $method = new \ReflectionMethod(RuntimeRunnerHandle::class, 'statusSnapshot');
+        $method = new ReflectionMethod(RuntimeRunnerHandle::class, 'statusSnapshot');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeStatusSnapshot::class, $returnType->getName());
     }
 
@@ -137,7 +142,7 @@ final class PublicApiContractTest extends TestCase
     public function testRuntimeStatusSnapshotExposesStableExportHelpers(): void
     {
         self::assertTrue(method_exists(RuntimeStatusSnapshot::class, 'toArray'));
-        self::assertTrue(is_a(RuntimeStatusSnapshot::class, \JsonSerializable::class, true));
+        self::assertTrue(is_a(RuntimeStatusSnapshot::class, JsonSerializable::class, true));
     }
 
     public function testRunnerFeedbackReadModelsRemainStablePublicSurface(): void
@@ -150,10 +155,10 @@ final class PublicApiContractTest extends TestCase
 
     public function testAsyncEslRuntimeRunnerHasStableReturnType(): void
     {
-        $method = new \ReflectionMethod(AsyncEslRuntime::class, 'runner');
+        $method = new ReflectionMethod(AsyncEslRuntime::class, 'runner');
         $returnType = $method->getReturnType();
 
-        self::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+        self::assertInstanceOf(ReflectionNamedType::class, $returnType);
         self::assertSame(RuntimeRunnerInterface::class, $returnType->getName());
     }
 

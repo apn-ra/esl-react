@@ -1,14 +1,17 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Runner;
 
+use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Contracts\AsyncEslClientInterface;
 use Apntalk\EslReact\Contracts\RuntimeFeedbackProviderInterface;
 use Apntalk\EslReact\Contracts\RuntimeStatusProviderInterface;
 use Apntalk\EslReact\Runtime\RuntimeClient;
-use Apntalk\EslReact\Connection\ConnectionState;
 use Apntalk\EslReact\Session\SessionState;
 use React\Promise\PromiseInterface;
+use Throwable;
 
 final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, RuntimeStatusProviderInterface
 {
@@ -16,7 +19,7 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
     private array $lifecycleListeners = [];
     private string $lastLifecycleSignature;
     private RuntimeRunnerState $state = RuntimeRunnerState::Starting;
-    private ?\Throwable $startupError = null;
+    private ?Throwable $startupError = null;
 
     /**
      * @param PromiseInterface<void> $startupPromise
@@ -40,7 +43,7 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
                 $this->state = RuntimeRunnerState::Running;
                 $this->emitLifecycleChangeIfChanged();
             },
-            function (\Throwable $e): void {
+            function (Throwable $e): void {
                 $this->startupError = $e;
                 $this->state = RuntimeRunnerState::Failed;
                 $this->emitLifecycleChangeIfChanged();
@@ -71,7 +74,7 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
         return $this->state;
     }
 
-    public function startupError(): ?\Throwable
+    public function startupError(): ?Throwable
     {
         return $this->startupError;
     }
@@ -293,7 +296,7 @@ final class RuntimeRunnerHandle implements RuntimeFeedbackProviderInterface, Run
     {
         try {
             $listener($snapshot);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             fwrite(STDERR, sprintf(
                 "[esl-react] Runtime lifecycle listener exception: %s\n",
                 $e->getMessage(),

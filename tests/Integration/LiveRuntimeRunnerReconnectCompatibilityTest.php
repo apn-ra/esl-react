@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -128,7 +130,7 @@ final class LiveRuntimeRunnerReconnectCompatibilityTest extends AsyncTestCase
 
             self::assertNotEmpty(array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['connection'] === 'reconnecting'
+                static fn(array $marker): bool => $marker['connection'] === 'reconnecting'
                     && $marker['session'] === 'disconnected'
                     && $marker['reconnecting'] === true
                     && $marker['draining'] === false
@@ -136,7 +138,7 @@ final class LiveRuntimeRunnerReconnectCompatibilityTest extends AsyncTestCase
             ));
             self::assertSame([], array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['connection'] === 'draining'
+                static fn(array $marker): bool => $marker['connection'] === 'draining'
                     || $marker['draining'] === true
             ), 'Unexpected transport-loss reconnect should not be reported as drain.');
 
@@ -169,7 +171,7 @@ final class LiveRuntimeRunnerReconnectCompatibilityTest extends AsyncTestCase
 
             self::assertGreaterThanOrEqual(2, count(array_filter(
                 $markers,
-                static fn (array $marker): bool => $marker['runner'] === 'running'
+                static fn(array $marker): bool => $marker['runner'] === 'running'
                     && $marker['connection'] === 'authenticated'
                     && $marker['session'] === 'active'
                     && $marker['live'] === true

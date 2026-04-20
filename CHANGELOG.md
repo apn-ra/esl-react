@@ -6,7 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-- No unreleased changes documented yet.
+- Release prep note for the next patch:
+  [docs/release-prep-v0.2.12.md](docs/release-prep-v0.2.12.md)
+- Continuity note: this file does not currently preserve changelog entries for `0.2.8` through `0.2.10`; surviving release-prep context for that range starts at [docs/release-prep-v0.2.10.md](docs/release-prep-v0.2.10.md).
+
+### Changed
+- Runtime ingress now consumes supported public `apntalk/esl-core` inbound-pipeline seams instead of relying on unsupported internal classification wiring, while keeping the existing runtime connect/auth and replay-facing behavior intact
+- Prepared bootstrap inbound pipelines now participate in the live runtime ingress path for startup and reconnect attempts instead of being accepted and discarded after handoff
+- Reconnect restore now fails closed when a restore command receives server `-ERR`: the runtime does not mark the session live, closes the just-authenticated connection, and continues supervised recovery according to retry policy
+- Live subscription and filter mutations now reject truthfully on server `-ERR`, preserve desired and observed local state correctly, and do not misclassify those failures as auth or reconnect failures
+- Release-facing docs and contract wording now match the implemented runtime truth for prepared ingress, reconnect restore failure handling, live mutation rejection behavior, `bgapi()` pre-auth/recovery rejection, health reporter methods, and health/status timestamp semantics
+- Repo-native formatting and release-validation gates are now normalized and passing again, including `composer cs-check` and the aggregate `composer check`
+
+### Added
+- Deterministic fake-server regression coverage for reconnect restore failure on server `-ERR`, proving the runtime does not report a false healthy/authenticated steady state when restore fails
+- Deterministic fake-server regression coverage for live subscription and filter mutation `-ERR` across `subscribe()`, `unsubscribe()`, `addFilter()`, and `removeFilter()`
 
 ## [0.2.11] - 2026-04-20
 

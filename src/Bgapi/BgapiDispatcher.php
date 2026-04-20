@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Bgapi;
 
@@ -7,8 +9,11 @@ use Apntalk\EslCore\Contracts\CommandInterface;
 use Apntalk\EslCore\Events\BackgroundJobEvent;
 use Apntalk\EslCore\Replies\BgapiAcceptedReply;
 use Apntalk\EslReact\Replay\RuntimeReplayCapture;
+use Closure;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+use RuntimeException;
+use Throwable;
 
 final class BgapiDispatcher
 {
@@ -18,7 +23,7 @@ final class BgapiDispatcher
     public function __construct(
         private readonly BgapiJobTracker $tracker,
         /** callable(CommandInterface, string, float): PromiseInterface */
-        private readonly \Closure $sendCommandReply,
+        private readonly Closure $sendCommandReply,
         private readonly float $ackTimeoutSeconds,
         private readonly ?RuntimeReplayCapture $replayCapture = null,
     ) {}
@@ -61,7 +66,7 @@ final class BgapiDispatcher
         $ackPromise->then(
             function (mixed $reply) use ($command, $job, &$jobUuid): void {
                 if (!($reply instanceof BgapiAcceptedReply)) {
-                    $job->reject(new \RuntimeException(
+                    $job->reject(new RuntimeException(
                         "bgapi {$command}: ack was not BgapiAcceptedReply, got " . get_class($reply),
                     ));
                     return;
@@ -71,7 +76,7 @@ final class BgapiDispatcher
                 $this->tracker->register($job);
                 $this->replayCapture?->captureBgapiAck($job, $reply);
             },
-            static function (\Throwable $e) use ($job): void {
+            static function (Throwable $e) use ($job): void {
                 $job->reject($e);
             },
         );
@@ -100,7 +105,7 @@ final class BgapiDispatcher
         return count($this->pendingJobs);
     }
 
-    public function terminateAll(\Throwable $reason): void
+    public function terminateAll(Throwable $reason): void
     {
         foreach ($this->pendingJobs as $job) {
             $jobUuid = $job->jobUuid();

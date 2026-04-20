@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Apntalk\EslReact\Tests\Integration;
 
@@ -70,7 +72,7 @@ final class LiveRuntimeBgapiCompatibilityTest extends AsyncTestCase
         self::assertSame($args, $handle->eslArgs());
 
         $this->waitUntil(
-            fn (): bool => $handle->jobUuid() !== '',
+            fn(): bool => $handle->jobUuid() !== '',
             6.0,
         );
 
